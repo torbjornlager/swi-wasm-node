@@ -1,0 +1,12 @@
+{
+  "name": "swi-wasm-node",
+  "version": "0.1.0",
+  "description": "Browser Web Prolog node powered by SWI-Prolog WASM",
+  "license": "MIT",
+  "private": true,
+  "repository": "https://github.com/torbjornlager/swi-wasm-node",
+  "scripts": {
+    "test": "python3 tools/test.py"
+  },
+  "main": "web/vendor/swi-wasm-node.js"
+}

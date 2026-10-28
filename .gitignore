@@ -1,0 +1,7 @@
+.DS_Store
+.build/
+dist/
+.trinity/
+__pycache__/
+*.pyc
+*.qlf

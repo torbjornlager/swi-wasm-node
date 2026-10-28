@@ -1,0 +1,6 @@
+<statechart version="0.2" initial="S1">
+    <state id="S1">
+        <go to="S2" on="go"/>
+    </state>
+    <state id="S2"/>
+</statechart>
