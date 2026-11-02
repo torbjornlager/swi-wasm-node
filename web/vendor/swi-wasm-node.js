@@ -4548,203 +4548,338 @@
   var mainSessionOwner = null;
 
   function installMainSession(node, options, host) {
-    var opening = null, running = null, ready = false, owner = null;
-    var rows = [], limit = Infinity, once = false, interruption = null;
-    var inputTicket = null, deferredError = null, outputTimer = null;
+    var opening = null,
+      running = null,
+      ready = false,
+      owner = null;
+    var rows = [],
+      limit = Infinity,
+      once = false,
+      interruption = null;
+    var inputTicket = null,
+      deferredError = null,
+      outputTimer = null;
     var baseInput = node.requestSwiWasmActorInput;
     var baseDispose = node.dispose;
     var baseHostEvent = node.swiWasmHostEvent;
-    node.swiWasmHostEvent = function(type, data) {
+    node.swiWasmHostEvent = function (type, data) {
       // Engine readiness precedes source loading; expose session readiness only
       // after open has installed the source, paging gate and output handler.
-      if (type !== "ready") return baseHostEvent(type, data);
+      if (type !== 'ready') return baseHostEvent(type, data);
     };
-    function check() { host.alive(); }
+    function check() {
+      host.alive();
+    }
     function flush() {
       if (node.swiWasmOutputBuffer) {
-        var text = node.swiWasmOutputBuffer; node.swiWasmOutputBuffer = "";
+        var text = node.swiWasmOutputBuffer;
+        node.swiWasmOutputBuffer = '';
         node.emitSwiWasmOutput(text);
       }
     }
     function publish(answer) {
       flush();
-      host.emit("answer", {message:answer}); host.settle(answer);
+      host.emit('answer', { message: answer });
+      host.settle(answer);
     }
+    // Only the current owner may retire page-global timers and bridge resources.
     function cleanup() {
-      if (outputTimer !== null) { clearInterval(outputTimer); outputTimer = null; }
+      if (outputTimer !== null) {
+        clearInterval(outputTimer);
+        outputTimer = null;
+      }
       if (owner && mainSessionOwner === owner) {
         node.resetSwiWasmActorWorkers();
-        Object.values(node.swiWasmRemoteActorConnections || {}).forEach(function(entry) { if (entry.socket) entry.socket.close(); });
-        if (typeof window.wasmStatechartCancelAll === "function") window.wasmStatechartCancelAll();
-        if (window._swiPromiseStore) Object.keys(window._swiPromiseStore.items).forEach(function(ref) {
-          window._swiPromiseStore.dispose(ref);
+        Object.values(node.swiWasmRemoteActorConnections || {}).forEach(function (entry) {
+          if (entry.socket) entry.socket.close();
         });
+        if (typeof window.wasmStatechartCancelAll === 'function')
+          window.wasmStatechartCancelAll();
+        if (window._swiPromiseStore)
+          Object.keys(window._swiPromiseStore.items).forEach(function (ref) {
+            window._swiPromiseStore.dispose(ref);
+          });
         mainSessionOwner = null;
       }
     }
-    node.requestSwiWasmActorInput = function(prompt) {
-      return new Promise(function(resolve, reject) {
-        var ticket = {reject:reject}; inputTicket = ticket;
-        Promise.resolve().then(function() {
-          if (inputTicket !== ticket) throw new Error("Input interrupted");
-          return baseInput(prompt);
-        }).then(function(value) {
-          if (inputTicket !== ticket) return;
-          inputTicket = null;
-          if (value === null) reject(new Error("Input cancelled")); else resolve(String(value));
-        }, function(error) {
-          if (inputTicket === ticket) { inputTicket = null; reject(error); }
-        });
+    // A cancelled ticket ignores a late response from an external input Promise.
+    node.requestSwiWasmActorInput = function (prompt) {
+      return new Promise(function (resolve, reject) {
+        var ticket = { reject: reject };
+        inputTicket = ticket;
+        Promise.resolve()
+          .then(function () {
+            if (inputTicket !== ticket) throw new Error('Input interrupted');
+            return baseInput(prompt);
+          })
+          .then(
+            function (value) {
+              if (inputTicket !== ticket) return;
+              inputTicket = null;
+              if (value === null) reject(new Error('Input cancelled'));
+              else resolve(String(value));
+            },
+            function (error) {
+              if (inputTicket === ticket) {
+                inputTicket = null;
+                reject(error);
+              }
+            }
+          );
       });
     };
-    node.open = function(session) {
+    node.open = function (session) {
       check();
       if (opening) return opening;
       var previous = mainSessionOwner;
       if (previous && previous.node !== node && !previous.closing) {
-        return Promise.reject(new Error("A main-thread session is already open on this page"));
+        return Promise.reject(
+          new Error('A main-thread session is already open on this page')
+        );
       }
-      opening = Promise.resolve(previous && previous.closing).then(function() {
-        check();
-        if (mainSessionOwner && mainSessionOwner.node !== node) {
-          throw new Error("A main-thread session is already open on this page");
-        }
-        owner = {node:node, closing:null}; mainSessionOwner = owner;
-        return node.initSwiWasmSession();
-      }).then(function() {
-        // Legacy hosts may preload in the background. Session hosts serialize
-        // these consults with source loading and the first query.
-        return node.swiWasmStatechartReady;
-      }).then(function() {
-        check();
-        return node.loadSwiWasmMainSource(String(session && session.source || ""));
-      }).then(function() {
-        check(); ready = true;
-        window.swiWasmAwaitMore = function() {
-          return new Promise(function(resolve, reject) {
-            node.swiWasmMorePending = {resolve:resolve,reject:reject};
-            if (interruption) { node.swiWasmMorePending = null; reject(interruption); }
-            else if (rows.length >= limit) {
-              if (once) {
-                interruption = "once"; node.swiWasmMorePending = null; reject(interruption);
+      opening = Promise.resolve(previous && previous.closing)
+        .then(function () {
+          check();
+          if (mainSessionOwner && mainSessionOwner.node !== node) {
+            throw new Error('A main-thread session is already open on this page');
+          }
+          owner = { node: node, closing: null };
+          mainSessionOwner = owner;
+          return node.initSwiWasmSession();
+        })
+        .then(function () {
+          // Legacy hosts may preload in the background. Session hosts serialize
+          // these consults with source loading and the first query.
+          return node.swiWasmStatechartReady;
+        })
+        .then(function () {
+          check();
+          return node.loadSwiWasmMainSource(String((session && session.source) || ''));
+        })
+        .then(function () {
+          check();
+          ready = true;
+          window.swiWasmAwaitMore = function () {
+            return new Promise(function (resolve, reject) {
+              node.swiWasmMorePending = { resolve: resolve, reject: reject };
+              if (interruption) {
+                node.swiWasmMorePending = null;
+                reject(interruption);
+              } else if (rows.length >= limit) {
+                if (once) {
+                  interruption = 'once';
+                  node.swiWasmMorePending = null;
+                  reject(interruption);
+                } else {
+                  var data = rows;
+                  rows = [];
+                  publish({ type: 'success', data: data, more: true });
+                }
               } else {
-                var data = rows; rows = [];
-                publish({type:"success",data:data,more:true});
+                node.swiWasmMorePending = null;
+                setTimeout(function () {
+                  interruption ? reject(interruption) : resolve('more');
+                }, 0);
               }
-            } else {
-              node.swiWasmMorePending = null;
-              setTimeout(function() { interruption ? reject(interruption) : resolve("more"); }, 0);
-            }
-          });
-        };
-        outputTimer = setInterval(flush, 50); flush(); host.emit("ready", {});
-      }).catch(function(error) {
-        ready = false; cleanup(); opening = null; throw error;
-      });
+            });
+          };
+          outputTimer = setInterval(flush, 50);
+          flush();
+          host.emit('ready', {});
+        })
+        .catch(function (error) {
+          ready = false;
+          cleanup();
+          opening = null;
+          throw error;
+        });
       return opening;
     };
-    function wait() { return host.wait(); }
+    function wait() {
+      return host.wait();
+    }
     function complete(error) {
-      flush(); running = null; node.swiWasmMorePending = null;
-      var data = rows; rows = [];
+      flush();
+      running = null;
+      node.swiWasmMorePending = null;
+      var data = rows;
+      rows = [];
       if (host.disposed()) return;
-      if (interruption && interruption !== "once") {
-        publish({type:interruption,more:false});
-      } else if (error && interruption !== "once") {
+      if (interruption && interruption !== 'once') {
+        publish({ type: interruption, more: false });
+      } else if (error && interruption !== 'once') {
         var message = node.swiWasmQueryException || String(error);
         // Like Worker PTCP, preserve a partial limited page before reporting
         // an exception on Next. Unbounded enumeration reports the error itself.
-        if (data.length && limit !== Infinity && !/representation_error\(constraints\)/.test(message)) {
-          deferredError = message; publish({type:"success",data:data,more:true});
-        } else publish({type:"error",data:message,more:false});
-      } else if (data.length) publish({type:"success",data:data,more:false});
-      else publish({type:"failure",more:false});
+        if (
+          data.length &&
+          limit !== Infinity &&
+          !/representation_error\(constraints\)/.test(message)
+        ) {
+          deferredError = message;
+          publish({ type: 'success', data: data, more: true });
+        } else publish({ type: 'error', data: message, more: false });
+      } else if (data.length) publish({ type: 'success', data: data, more: false });
+      else publish({ type: 'failure', more: false });
     }
-    node.query = function(goal, queryOptions) {
+    node.query = function (goal, queryOptions) {
       check();
-      if (!ready) return Promise.reject(new Error("Open a session first"));
-      if (running || deferredError !== null) return Promise.reject(new Error("Stop or exhaust the preceding query first"));
+      if (!ready) return Promise.reject(new Error('Open a session first'));
+      if (running || deferredError !== null)
+        return Promise.reject(new Error('Stop or exhaust the preceding query first'));
       var parsed;
-      try { parsed = sessionCallOptions(typeof queryOptions === "string" ? queryOptions : node.toplevelCallOptionsText(queryOptions || {})); }
-      catch (error) { var invalid = {type:"error",data:error.message,more:false}; host.emit("answer",{message:invalid}); return Promise.resolve(invalid); }
-      limit = parsed.limit; once = parsed.once; rows = []; interruption = null; node.swiWasmQueryException = null;
+      try {
+        parsed = sessionCallOptions(
+          typeof queryOptions === 'string'
+            ? queryOptions
+            : node.toplevelCallOptionsText(queryOptions || {})
+        );
+      } catch (error) {
+        var invalid = { type: 'error', data: error.message, more: false };
+        host.emit('answer', { message: invalid });
+        return Promise.resolve(invalid);
+      }
+      limit = parsed.limit;
+      once = parsed.once;
+      rows = [];
+      interruption = null;
+      node.swiWasmQueryException = null;
       var answer = wait();
-      var driven = "swi_wasm_actor_bridge:session_solution(" + node.prologQuotedText(String(goal)) + "," + parsed.offset + ",Bindings)";
-      running = Promise.resolve().then(function() {
-        check();
-        return node.driveSwiWasmMainQuery(driven, function(bindings) {
-          rows.push(sessionDisplayRow(bindings.Bindings));
-        });
-      }).then(function() { complete(); }, complete);
+      var driven =
+        'swi_wasm_actor_bridge:session_solution(' +
+        node.prologQuotedText(String(goal)) +
+        ',' +
+        parsed.offset +
+        ',Bindings)';
+      running = Promise.resolve()
+        .then(function () {
+          check();
+          return node.driveSwiWasmMainQuery(driven, function (bindings) {
+            rows.push(sessionDisplayRow(bindings.Bindings));
+          });
+        })
+        .then(function () {
+          complete();
+        }, complete);
       return answer;
     };
-    node.next = function() {
+    node.next = function () {
       check();
       if (deferredError !== null) {
-        var error = deferredError; deferredError = null;
-        var answer = {type:"error",data:error,more:false}; host.emit("answer",{message:answer}); return Promise.resolve(answer);
+        var error = deferredError;
+        deferredError = null;
+        var answer = { type: 'error', data: error, more: false };
+        host.emit('answer', { message: answer });
+        return Promise.resolve(answer);
       }
-      if (!node.swiWasmMorePending) return Promise.reject(new Error("No pending continuation"));
-      var result = wait(), gate = node.swiWasmMorePending;
-      node.swiWasmMorePending = null; gate.resolve("more"); return result;
+      if (!node.swiWasmMorePending)
+        return Promise.reject(new Error('No pending continuation'));
+      var result = wait(),
+        gate = node.swiWasmMorePending;
+      node.swiWasmMorePending = null;
+      gate.resolve('more');
+      return result;
     };
     function interrupt(type) {
-      check(); deferredError = null;
-      if (!running) return Promise.resolve({type:type,more:false});
+      check();
+      deferredError = null;
+      if (!running) return Promise.resolve({ type: type, more: false });
       interruption = type;
       var result = host.pending() ? Promise.resolve() : wait();
       var resumed = false;
       if (node.swiWasmMorePending) {
-        var gate = node.swiWasmMorePending; node.swiWasmMorePending = null; gate.reject(type); resumed = true;
+        var gate = node.swiWasmMorePending;
+        node.swiWasmMorePending = null;
+        gate.reject(type);
+        resumed = true;
       }
-      if (inputTicket) { inputTicket.reject(new Error(type)); inputTicket = null; host.cancelInput(); resumed = true; }
-      if (typeof window.swiAbortRpc === "function") window.swiAbortRpc();
-      if (typeof window.swiAbortPromiseWaits === "function" && window.swiAbortPromiseWaits() > 0) resumed = true;
+      if (inputTicket) {
+        inputTicket.reject(new Error(type));
+        inputTicket = null;
+        host.cancelInput();
+        resumed = true;
+      }
+      if (typeof window.swiAbortRpc === 'function') window.swiAbortRpc();
+      if (
+        typeof window.swiAbortPromiseWaits === 'function' &&
+        window.swiAbortPromiseWaits() > 0
+      )
+        resumed = true;
       if (node.cancelSwiWasmMainActorWaiters(type) > 0) resumed = true;
-      if (node.closeSwiWasmWorkerScopes("main")) resumed = true;
+      if (node.closeSwiWasmWorkerScopes('main')) resumed = true;
+      // Rejected waits already unwind the search. A second abort signal could
+      // survive that unwind and accidentally interrupt the following query.
       if (!resumed) node.swiWasmProlog.abort();
       return result;
     }
-    node.stop = function() { return interrupt("stop"); };
-    node.abort = function() { return interrupt("abort"); };
-    node.dispose = function() {
+    node.stop = function () {
+      return interrupt('stop');
+    };
+    node.abort = function () {
+      return interrupt('abort');
+    };
+    node.dispose = function () {
       if (host.disposed()) return;
       ready = false;
-      if (running) Promise.resolve(interrupt("abort")).catch(function() {});
+      if (running) Promise.resolve(interrupt('abort')).catch(function () {});
+      // Keep ownership until startup and any suspended search have unwound.
+      // A replacement main session waits for this barrier before installing globals.
       var finishing = Promise.allSettled([opening, running]);
       if (owner) owner.closing = finishing;
       baseDispose();
-      if (outputTimer !== null) { clearInterval(outputTimer); outputTimer = null; }
+      if (outputTimer !== null) {
+        clearInterval(outputTimer);
+        outputTimer = null;
+      }
       finishing.then(cleanup);
     };
     return node;
   }
 
   function sessionCallOptions(text) {
-    if (/(?:^|[,\[])\s*src_text\s*\(/.test(text)) throw new Error("Unsupported toplevel_call source option");
+    if (/(?:^|[,\[])\s*src_text\s*\(/.test(text))
+      throw new Error('Unsupported toplevel_call source option');
     function integer(name, fallback) {
-      var present = new RegExp("(?:^|[,\\[])\\s*" + name + "\\s*\\(").test(text);
-      var match = new RegExp("(?:^|[,\\[])\\s*" + name + "\\s*\\(\\s*(\\d+)\\s*\\)").exec(text);
-      if (present && (!match || !Number.isSafeInteger(Number(match[1])) || (name === "limit" && Number(match[1]) === 0))) {
-        throw new Error(name + " must be " + (name === "limit" ? "a positive" : "a non-negative") + " integer");
+      var present = new RegExp('(?:^|[,\\[])\\s*' + name + '\\s*\\(').test(text);
+      var match = new RegExp('(?:^|[,\\[])\\s*' + name + '\\s*\\(\\s*(\\d+)\\s*\\)').exec(
+        text
+      );
+      if (
+        present &&
+        (!match ||
+          !Number.isSafeInteger(Number(match[1])) ||
+          (name === 'limit' && Number(match[1]) === 0))
+      ) {
+        throw new Error(
+          name +
+            ' must be ' +
+            (name === 'limit' ? 'a positive' : 'a non-negative') +
+            ' integer'
+        );
       }
       return match ? Number(match[1]) : fallback;
     }
-    return {limit:integer("limit",Infinity),offset:integer("offset",0),once:/(?:^|[,\[])\s*once\s*\(\s*true\s*\)/.test(text)};
+    return {
+      limit: integer('limit', Infinity),
+      offset: integer('offset', 0),
+      once: /(?:^|[,\[])\s*once\s*\(\s*true\s*\)/.test(text),
+    };
   }
   function sessionCompound(value) {
     var functor;
     var args;
-    if (!value || typeof value !== "object" || value.$t !== "t") {
+    if (!value || typeof value !== 'object' || value.$t !== 't') {
       return null;
     }
-    functor = value.functor || Object.keys(value).find(function(key) {
-      return key !== "$t";
-    });
+    functor =
+      value.functor ||
+      Object.keys(value).find(function (key) {
+        return key !== '$t';
+      });
     if (!functor) {
       return null;
     }
-    args = typeof value.arguments === "function" ? value.arguments() : value[functor];
+    args = typeof value.arguments === 'function' ? value.arguments() : value[functor];
     if (Array.isArray(args) && args.length === 1 && Array.isArray(args[0])) {
       args = args[0];
     }
@@ -4753,133 +4888,200 @@
 
   function sessionAtom(value) {
     var text = String(value);
-    if (/^[a-z][A-Za-z0-9_]*$/.test(text) ||
-        text === "[]" || text === "!" || text === "true" || text === "false") {
+    if (
+      /^[a-z][A-Za-z0-9_]*$/.test(text) ||
+      text === '[]' ||
+      text === '!' ||
+      text === 'true' ||
+      text === 'false'
+    ) {
       return text;
     }
-    return "'" + text.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+    return "'" + text.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
   }
 
   function sessionValue(value) {
     var compound;
     var args;
-    if (value === null) return "null";
-    if (value === undefined) return "_";
-    if (typeof value === "number" || typeof value === "bigint") return String(value);
-    if (typeof value === "boolean") return value ? "true" : "false";
-    if (typeof value === "string") return sessionAtom(value);
+    if (value === null) return 'null';
+    if (value === undefined) return '_';
+    if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'string') return sessionAtom(value);
     if (Array.isArray(value)) {
-      return "[" + value.map(sessionValue).join(",") + "]";
+      return '[' + value.map(sessionValue).join(',') + ']';
     }
-    if (value && value.$t === "v") {
-      return "_" + (value.v !== undefined ? value.v : "");
+    if (value && value.$t === 'v') {
+      return '_' + (value.v !== undefined ? value.v : '');
     }
-    if (value && value.$t === "s") {
+    if (value && value.$t === 's') {
       return JSON.stringify(String(value.v));
     }
-    if (value && value.$t === "l") {
+    if (value && value.$t === 'l') {
       var items = Array.isArray(value.v) ? value.v.map(sessionValue) : [];
-      return "[" + items.join(",") +
-        (value.t !== undefined ? "|" + sessionValue(value.t) : "") + "]";
+      return (
+        '[' +
+        items.join(',') +
+        (value.t !== undefined ? '|' + sessionValue(value.t) : '') +
+        ']'
+      );
     }
     compound = sessionCompound(value);
     if (compound) {
       args = compound.args;
-      if (compound.functor === "@" && args.length === 2) {
-        return sessionValue(args[0]) + "@" + sessionValue(args[1]);
+      if (compound.functor === '@' && args.length === 2) {
+        return sessionValue(args[0]) + '@' + sessionValue(args[1]);
       }
-      if (compound.functor === "/" && args.length === 2) {
-        return sessionValue(args[0]) + "/" + sessionValue(args[1]);
+      if (compound.functor === '/' && args.length === 2) {
+        return sessionValue(args[0]) + '/' + sessionValue(args[1]);
       }
-      if (compound.functor === "-" && args.length === 2) {
-        return sessionValue(args[0]) + "-" + sessionValue(args[1]);
+      if (compound.functor === '-' && args.length === 2) {
+        return sessionValue(args[0]) + '-' + sessionValue(args[1]);
       }
-      if (compound.functor === "=" && args.length === 2) {
-        return sessionValue(args[0]) + "=" + sessionValue(args[1]);
+      if (compound.functor === '=' && args.length === 2) {
+        return sessionValue(args[0]) + '=' + sessionValue(args[1]);
       }
-      if (compound.functor === "," && args.length === 2) {
-        return "(" + sessionValue(args[0]) + "," + sessionValue(args[1]) + ")";
+      if (compound.functor === ',' && args.length === 2) {
+        return '(' + sessionValue(args[0]) + ',' + sessionValue(args[1]) + ')';
       }
       if (args.length === 0) return sessionAtom(compound.functor);
-      return sessionAtom(compound.functor) + "(" + args.map(sessionValue).join(",") + ")";
+      return sessionAtom(compound.functor) + '(' + args.map(sessionValue).join(',') + ')';
     }
     return String(value);
   }
 
+  // Match Worker presentation, including the engine objects' JSON conversion.
   function sessionDisplayRow(row) {
-    try { row = JSON.parse(JSON.stringify(row)); } catch (_) {}
+    try {
+      row = JSON.parse(JSON.stringify(row));
+    } catch (_) {}
     var display = {};
-    Object.keys(row || {}).forEach(function(key) {
-      if (/^[A-Z_]/.test(key) && key !== "_" && !(row[key] && row[key].$t === "v")) display[key] = sessionValue(row[key]);
+    Object.keys(row || {}).forEach(function (key) {
+      if (/^[A-Z_]/.test(key) && key !== '_' && !(row[key] && row[key].$t === 'v'))
+        display[key] = sessionValue(row[key]);
     });
     return display;
   }
 
   function create(options) {
     options = options || {};
-    var mode = options.mode === undefined ? "worker" : options.mode;
-    if (mode !== "worker" && mode !== "main") throw new Error("mode must be worker or main");
+    var mode = options.mode === undefined ? 'worker' : options.mode;
+    if (mode !== 'worker' && mode !== 'main')
+      throw new Error('mode must be worker or main');
     var node = Object.assign(createState(), methods);
-    var disposed = false, opening = null, pending = null;
+    var disposed = false,
+      opening = null,
+      pending = null;
     var inputWaiters = [];
-    var origin = options.baseUrl || (typeof location !== "undefined" ? location.href : "http://localhost/");
-    function asset(value) { return new URL(value, origin).href; }
+    var origin =
+      options.baseUrl ||
+      (typeof location !== 'undefined' ? location.href : 'http://localhost/');
+    function asset(value) {
+      return new URL(value, origin).href;
+    }
     node.swiWasmAssets = {
-      workerUrl: asset(options.workerUrl || "/swi_wasm_actor_worker.js"),
-      engineUrl: asset(options.engineUrl || "/swipl-bundle.js"),
-      prologBaseUrl: asset(options.prologBaseUrl || "/wasm/"),
-      sharedDatabaseUrl: options.sharedDatabaseUrl === null ? null : asset(options.sharedDatabaseUrl || "/wasm/shared_db.pl")
+      workerUrl: asset(options.workerUrl || '/swi_wasm_actor_worker.js'),
+      engineUrl: asset(options.engineUrl || '/swipl-bundle.js'),
+      prologBaseUrl: asset(options.prologBaseUrl || '/wasm/'),
+      sharedDatabaseUrl:
+        options.sharedDatabaseUrl === null
+          ? null
+          : asset(options.sharedDatabaseUrl || '/wasm/shared_db.pl'),
     };
-    node.isSwiWasm2Mode = mode === "worker";
+    node.isSwiWasm2Mode = mode === 'worker';
     function emit(type, data) {
-      if (!disposed && options.onEvent) return options.onEvent(Object.assign({type:type}, data || {}));
+      if (!disposed && options.onEvent)
+        return options.onEvent(Object.assign({ type: type }, data || {}));
       return false;
     }
     function settle(message, error) {
       if (!pending) return;
-      var current = pending; pending = null;
-      if (error) current.reject(error); else current.resolve(message);
+      var current = pending;
+      pending = null;
+      if (error) current.reject(error);
+      else current.resolve(message);
     }
-    node.log = function(level, text, scope, direction) { emit("log", {level:level,text:text,scope:scope,direction:direction}); };
-    node.logSwiWasmWorkerTraffic = function(message, direction) { emit("traffic", {message:message,direction:direction}); };
-    node.emitSwiWasmOutput = function(text, kind, source) { return emit("output", {data:String(text == null ? "" : text),kind:kind,source:source}); };
-    node.swiWasmHostEvent = function(type, data) {
-      emit(type, data);
-      if (type === "shell_error" || type === "error") settle(null, new Error(data.error));
+    node.log = function (level, text, scope, direction) {
+      emit('log', { level: level, text: text, scope: scope, direction: direction });
     };
-    node.handleSwiWasmTrace = function(text) { emit("statechart_trace", {data:text}); };
-    node.swiWasmStatechartOwnsActorTraffic = function() { return false; };
-    node.startSwiWasmLocalChart = function(live) { node.swiWasmStatechartActive = live; };
-    node.stopSwiWasmLocalChart = function() { node.swiWasmStatechartActive = false; };
-    node.enqueueSwiWasmStatechartEvent = function(text) { emit("statechart_event", {data:text}); };
-    node.requestSwiWasmActorInput = function(prompt) {
-      var response = options.onInput ? null : new Promise(function(resolve) { inputWaiters.push(resolve); });
-      emit("prompt", {data:String(prompt)});
+    node.logSwiWasmWorkerTraffic = function (message, direction) {
+      emit('traffic', { message: message, direction: direction });
+    };
+    node.emitSwiWasmOutput = function (text, kind, source) {
+      return emit('output', {
+        data: String(text == null ? '' : text),
+        kind: kind,
+        source: source,
+      });
+    };
+    node.swiWasmHostEvent = function (type, data) {
+      emit(type, data);
+      if (type === 'shell_error' || type === 'error') settle(null, new Error(data.error));
+    };
+    node.handleSwiWasmTrace = function (text) {
+      emit('statechart_trace', { data: text });
+    };
+    node.swiWasmStatechartOwnsActorTraffic = function () {
+      return false;
+    };
+    node.startSwiWasmLocalChart = function (live) {
+      node.swiWasmStatechartActive = live;
+    };
+    node.stopSwiWasmLocalChart = function () {
+      node.swiWasmStatechartActive = false;
+    };
+    node.enqueueSwiWasmStatechartEvent = function (text) {
+      emit('statechart_event', { data: text });
+    };
+    node.requestSwiWasmActorInput = function (prompt) {
+      var response = options.onInput
+        ? null
+        : new Promise(function (resolve) {
+            inputWaiters.push(resolve);
+          });
+      emit('prompt', { data: String(prompt) });
       return response || Promise.resolve(options.onInput(String(prompt)));
     };
-    node.handleSwiWasm2ToplevelMessage = function(pid, message) {
+    node.handleSwiWasm2ToplevelMessage = function (pid, message) {
       if (pid !== node.swiWasm2ShellPid) return false;
-      if (message.type === "output" && Object.prototype.hasOwnProperty.call(message,"data")) {
-        node.emitSwiWasmOutput(message.data); return true;
+      if (
+        message.type === 'output' &&
+        Object.prototype.hasOwnProperty.call(message, 'data')
+      ) {
+        node.emitSwiWasmOutput(message.data);
+        return true;
       }
-      if (message.type === "prompt") {
-        node.requestSwiWasmActorInput(message.data || "").then(function(answer) {
+      if (message.type === 'prompt') {
+        node.requestSwiWasmActorInput(message.data || '').then(function (answer) {
           var entry = node.swiWasmActorWorkers[pid];
           if (!disposed && entry && !entry.done && answer !== null) {
-            entry.worker.postMessage({command:"toplevel_respond",pid:Number(pid),input:String(answer)});
+            entry.worker.postMessage({
+              command: 'toplevel_respond',
+              pid: Number(pid),
+              input: String(answer),
+            });
           }
         });
         return true;
       }
-      if (["success","failure","timeout","stop","abort","halted"].indexOf(message.type) >= 0 ||
-          (message.type === "error" && Object.prototype.hasOwnProperty.call(message,"data"))) {
+      if (
+        ['success', 'failure', 'timeout', 'stop', 'abort', 'halted'].indexOf(
+          message.type
+        ) >= 0 ||
+        (message.type === 'error' &&
+          Object.prototype.hasOwnProperty.call(message, 'data'))
+      ) {
         node.swiWasm2QueryPending = message.more === true;
-        emit("answer", {message:message}); settle(message); return true;
+        emit('answer', { message: message });
+        settle(message);
+        return true;
       }
-      return message.type === "responded";
+      return message.type === 'responded';
     };
-    function alive() { if (disposed) throw new Error("Browser node is disposed"); }
-    node.open = function(session) {
+    function alive() {
+      if (disposed) throw new Error('Browser node is disposed');
+    }
+    node.open = function (session) {
       alive();
       if (opening) {
         var existing = node.swiWasmActorWorkers[node.swiWasm2ShellPid];
@@ -4889,9 +5091,15 @@
       session = session || {};
       var pid = node.reserveSwiWasmWorkerActorPid();
       node.swiWasm2ShellPid = pid;
-      opening = node.spawnSwiWasmWorkerActorReady(
-        "swi_wasm_actor_bridge:ptcp(" + qualifySwiWasmLocalPid(pid) + ",terminal,true)",
-        String(session.source || ""), pid, "", "shell_toplevel").catch(function(error) {
+      opening = node
+        .spawnSwiWasmWorkerActorReady(
+          'swi_wasm_actor_bridge:ptcp(' + qualifySwiWasmLocalPid(pid) + ',terminal,true)',
+          String(session.source || ''),
+          pid,
+          '',
+          'shell_toplevel'
+        )
+        .catch(function (error) {
           node.cleanupSwiWasm2ShellEntry(pid, node.swiWasmActorWorkers[pid]);
           if (node.swiWasm2ShellPid === pid) opening = null;
           throw error;
@@ -4900,65 +5108,120 @@
     };
     function command(name, fields) {
       alive();
-      if (!opening || !node.swiWasm2ShellReady) return Promise.reject(new Error("Open a session first"));
-      if (pending) return Promise.reject(new Error("A query is already pending"));
-      return new Promise(function(resolve,reject) {
-        pending = {resolve:resolve,reject:reject};
+      if (!opening || !node.swiWasm2ShellReady)
+        return Promise.reject(new Error('Open a session first'));
+      if (pending) return Promise.reject(new Error('A query is already pending'));
+      return new Promise(function (resolve, reject) {
+        pending = { resolve: resolve, reject: reject };
         try {
-          node.swiWasmActorWorkers[node.swiWasm2ShellPid].worker.postMessage(Object.assign(
-            {command:name,pid:Number(node.swiWasm2ShellPid)},fields || {}));
-        } catch(error) { settle(null,error); }
+          node.swiWasmActorWorkers[node.swiWasm2ShellPid].worker.postMessage(
+            Object.assign(
+              { command: name, pid: Number(node.swiWasm2ShellPid) },
+              fields || {}
+            )
+          );
+        } catch (error) {
+          settle(null, error);
+        }
       });
     }
-    node.query = function(goal, queryOptions) {
-      if (node.swiWasm2QueryPending) return Promise.reject(new Error("Stop or exhaust the preceding query first"));
-      return command("toplevel_call", {goal:String(goal),options:typeof queryOptions === "string" ? queryOptions : node.toplevelCallOptionsText(queryOptions || {})});
+    node.query = function (goal, queryOptions) {
+      if (node.swiWasm2QueryPending)
+        return Promise.reject(new Error('Stop or exhaust the preceding query first'));
+      return command('toplevel_call', {
+        goal: String(goal),
+        options:
+          typeof queryOptions === 'string'
+            ? queryOptions
+            : node.toplevelCallOptionsText(queryOptions || {}),
+      });
     };
-    node.next = function() {
-      if (!node.swiWasm2QueryPending) return Promise.reject(new Error("No pending continuation"));
-      return command("toplevel_next");
+    node.next = function () {
+      if (!node.swiWasm2QueryPending)
+        return Promise.reject(new Error('No pending continuation'));
+      return command('toplevel_next');
     };
     function interrupt(name) {
       alive();
       if (!pending) return command(name);
       var current = pending;
-      node.swiWasmActorWorkers[node.swiWasm2ShellPid].worker.postMessage({command:name,pid:Number(node.swiWasm2ShellPid)});
+      node.swiWasmActorWorkers[node.swiWasm2ShellPid].worker.postMessage({
+        command: name,
+        pid: Number(node.swiWasm2ShellPid),
+      });
       // The outstanding query's promise receives the interruption response.
       return Promise.resolve();
     }
-    node.stop = function() { return interrupt("toplevel_stop"); };
-    node.abort = function() { return interrupt("toplevel_abort"); };
-    node.input = function(text) { alive(); var resolve=inputWaiters.shift(); if (!resolve) throw new Error("No pending input"); resolve(text); };
-    node.dispose = function() {
+    node.stop = function () {
+      return interrupt('toplevel_stop');
+    };
+    node.abort = function () {
+      return interrupt('toplevel_abort');
+    };
+    node.input = function (text) {
+      alive();
+      var resolve = inputWaiters.shift();
+      if (!resolve) throw new Error('No pending input');
+      resolve(text);
+    };
+    node.dispose = function () {
       if (disposed) return;
       disposed = true;
-      settle(null,new Error("Browser node disposed"));
-      inputWaiters.splice(0).forEach(function(resolve) { resolve(null); });
-      Object.values(node.swiWasmRemoteActorConnections || {}).forEach(function(entry) {
+      settle(null, new Error('Browser node disposed'));
+      inputWaiters.splice(0).forEach(function (resolve) {
+        resolve(null);
+      });
+      Object.values(node.swiWasmRemoteActorConnections || {}).forEach(function (entry) {
         if (entry.socket) entry.socket.close();
       });
-      Object.values(node.swiWasmActorWorkers || {}).forEach(function(entry) {
-        if (entry.rejectReady) entry.rejectReady(new Error("Browser node disposed"));
+      Object.values(node.swiWasmActorWorkers || {}).forEach(function (entry) {
+        if (entry.rejectReady) entry.rejectReady(new Error('Browser node disposed'));
       });
       node.resetSwiWasmActorWorkers();
     };
-    if (mode === "main") return installMainSession(node, options, {
-      alive:alive, emit:emit, settle:settle,
-      disposed:function() { return disposed; }, pending:function() { return !!pending; },
-      wait:function() {
-        if (pending) throw new Error("A query is already pending");
-        return new Promise(function(resolve,reject) { pending = {resolve:resolve,reject:reject}; });
-      },
-      cancelInput:function() { inputWaiters.splice(0).forEach(function(resolve) { resolve(null); }); }
-    });
+    if (mode === 'main')
+      return installMainSession(node, options, {
+        alive: alive,
+        emit: emit,
+        settle: settle,
+        disposed: function () {
+          return disposed;
+        },
+        pending: function () {
+          return !!pending;
+        },
+        wait: function () {
+          if (pending) throw new Error('A query is already pending');
+          return new Promise(function (resolve, reject) {
+            pending = { resolve: resolve, reject: reject };
+          });
+        },
+        cancelInput: function () {
+          inputWaiters.splice(0).forEach(function (resolve) {
+            resolve(null);
+          });
+        },
+      });
     return node;
   }
 
   return {
-    create:create, createState:createState, methods:methods,
-    helpers:{splitTopLevelArgs:splitTopLevelArgs,unwrapPrologCompound:unwrapPrologCompound,stripRuntimeErrorScaffolding:stripRuntimeErrorScaffolding,exceptionDisplayTerm:exceptionDisplayTerm,sanitizeDownReasonTerm:sanitizeDownReasonTerm,normalizeNodeUrl:normalizeNodeUrl,isLoopbackHost:isLoopbackHost,
-      resolveBrowserRpcBaseUri:resolveBrowserRpcBaseUri,resolveBrowserRpcLoadUri:resolveBrowserRpcLoadUri,
-      parseSwiWasmQualifiedServiceAddress:parseSwiWasmQualifiedServiceAddress,
-      qualifySwiWasmLocalPid:qualifySwiWasmLocalPid,localizeSwiWasmPid:localizeSwiWasmPid}
+    create: create,
+    createState: createState,
+    methods: methods,
+    helpers: {
+      splitTopLevelArgs: splitTopLevelArgs,
+      unwrapPrologCompound: unwrapPrologCompound,
+      stripRuntimeErrorScaffolding: stripRuntimeErrorScaffolding,
+      exceptionDisplayTerm: exceptionDisplayTerm,
+      sanitizeDownReasonTerm: sanitizeDownReasonTerm,
+      normalizeNodeUrl: normalizeNodeUrl,
+      isLoopbackHost: isLoopbackHost,
+      resolveBrowserRpcBaseUri: resolveBrowserRpcBaseUri,
+      resolveBrowserRpcLoadUri: resolveBrowserRpcLoadUri,
+      parseSwiWasmQualifiedServiceAddress: parseSwiWasmQualifiedServiceAddress,
+      qualifySwiWasmLocalPid: qualifySwiWasmLocalPid,
+      localizeSwiWasmPid: localizeSwiWasmPid,
+    },
   };
 });
