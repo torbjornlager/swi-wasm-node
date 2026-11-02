@@ -8,8 +8,8 @@ HTTP RPC and browser-to-node WebSocket interoperability without a demonstrator U
 The initial release retains `swipl-wasm@8.2.5` (SWI-Prolog 10.1.19). The application
 supplies terminal/editor presentation, input callbacks and any shared database.
 The packaged default database is empty; tutorial data is only a test fixture.
-The compatibility main engine retains its page-global bridge and DOM access.
-The primary convenience session API uses Workers.
+The session API supports Worker execution (the default) and main-thread
+execution with DOM access. The main engine retains its page-global bridge.
 
 ## Build and test
 
@@ -43,6 +43,7 @@ Load `web/swi_wasm_actor_worker.js` for the compatibility promise store, then
 
 ```javascript
 const node = SwiWasmNode.create({
+  mode: 'worker', // Use 'main' for the UI-thread engine with library(dom).
   workerUrl: '/swi_wasm_actor_worker.js',
   engineUrl: '/swipl-bundle.js',
   prologBaseUrl: '/wasm/',
@@ -55,13 +56,40 @@ console.log(await node.query('square(3,Y)', {limit: 1}));
 node.dispose();
 ```
 
-The Worker session API is `open`, `query`, `next`, `stop`, `abort`, `input`,
-`dispose`. Responses retain the public Prolog answer envelopes. Host callbacks
+Both modes use `open`, `query`, `next`, `stop`, `abort`, `input`, `dispose`.
+Responses retain the public Prolog answer envelopes and formatted binding rows.
+`query` accepts `{limit, offset, once}` or equivalent Prolog options text.
+Without `limit`, it collects all answers; a positive limit gives lazy pages.
+`once:true` returns only the first page. `open` is idempotent, preserving edits;
+use a new session for a different source program. Host callbacks
 receive output, traces, logs and lifecycle events. `methods` and `createState`
 provide the existing demonstrator's adapter interface. Main compatibility also
 exports `initSwiWasmSession`, `loadSwiWasmMainSource`, `driveSwiWasmMainQuery`.
 See [runtime details](docs/runtime.md) and [transport contract](docs/browser_actor_transport.md).
 The shared language reference remains the demonstrator's Web Prolog manual.
+
+Worker sessions are independent. A page can have one open main-thread session
+alongside any Worker sessions. A second main session is rejected; after disposal,
+a replacement's `open` waits for the old engine's startup/query work to unwind.
+Do not mix a high-level main session with a separate legacy compatibility engine
+on the same page. Main-thread Abort is cooperative: a call that cannot yield
+also blocks the interface. Worker execution retains hard interruption/isolation.
+Main-thread syntax errors return an error envelope and leave the session usable;
+the existing Worker syntax-error path may require `open` to replace its shell.
+
+The optional real-browser session suite checks both modes through the public API:
+
+```sh
+NODE_PATH=/path/to/node_modules python3 /fresh/package/tools/test.py \
+  --package /fresh/package --report /fresh/browser-results \
+  --browser-executable /path/to/chrome
+```
+
+This additionally requires Playwright on Node's module path and an installed
+Chromium/Chrome browser. The runner supplies a loopback static server and checks
+DOM access, common paging/options, actor/statechart use, input, Abort, cleanup,
+startup failure, and main-session ownership. Core tests keep their existing
+Node/Python-only dependencies when this option is omitted.
 
 ## Source, schema and licensing
 

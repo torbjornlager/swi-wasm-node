@@ -12,6 +12,27 @@ limitations; it does not define a separate browser language.
 
 ## Worker and compatibility main engine
 
+The high-level `SwiWasmNode.create({mode:'worker'|'main', ...})` session API
+supports both models. Worker is the default. Main uses the same `open`, `query`,
+`next`, `stop`, `abort`, `input` and `dispose` methods and public answer events.
+The session host serializes initial statechart preloading, application source
+loading and the first query; older compatibility hosts retain background preload.
+Main sessions load source once, preserve edits, and use the existing heartbeat
+driver with native variable-name capture and Worker-compatible display rows.
+Default enumeration is unbounded; `limit` batches lazy pages, `offset` skips
+initial solutions, and `once` cuts after the first page. A partial limited page
+is delivered before an ordinary exception, which is reported on `next`.
+Attributed answers are rejected with `representation_error(constraints)`.
+
+Only one high-level main session can own the page-global bridge at a time.
+Disposal rejects pending client work, cancels input and mailbox waits, resets
+actors and timers, closes transports and disposes the promise store. Ownership
+is held until initialization and active queries finish unwinding, so reopening
+cannot race stale bridge installation. Late input completions are ignored.
+Initialization failure also releases ownership. Worker sessions may coexist.
+Legacy direct `initSwiWasmSession` callers must not initialize a separate main
+engine alongside a high-level main session on that page.
+
 The Worker runtime runs each actor in its own Web Worker and SWI-Prolog engine.
 The optional main-thread compatibility runtime runs shell queries in a shared
 page engine; actors spawned from it still use Workers. Their implementations

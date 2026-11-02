@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Test the packaged runtime. Native schema/wire comparison is explicit and optional."""
 from pathlib import Path
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 import argparse,json,os,shutil,signal,subprocess,tempfile,time,sys
 sys.dont_write_bytecode=True
 from package_runtime import verify
@@ -19,7 +22,7 @@ def run(label,command,env,root,out):
     return dict(label=label,command=command,exit_code=code,seconds=round(time.monotonic()-start,3))
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--package',type=Path,default=Path(__file__).resolve().parents[1]);p.add_argument('--report',type=Path,required=True);p.add_argument('--native-root',type=Path);p.add_argument('--swipl',default=os.environ.get('SWIPL'));p.add_argument('--javascript-only',action='store_true');p.add_argument('--host-module',type=Path);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--package',type=Path,default=Path(__file__).resolve().parents[1]);p.add_argument('--report',type=Path,required=True);p.add_argument('--native-root',type=Path);p.add_argument('--swipl',default=os.environ.get('SWIPL'));p.add_argument('--javascript-only',action='store_true');p.add_argument('--host-module',type=Path);p.add_argument('--browser-executable',type=Path,help='Also run the public session API in real Chrome/Chromium (requires Playwright)');a=p.parse_args()
     root=a.package.resolve();manifest=verify(root);a.report.mkdir(parents=True,exist_ok=False)
     env=dict(os.environ);env.pop('TRINITY_PINNED_SWI_ROOT',None);env.pop('SWI_WASM_TEST_HOST',None)
     if a.host_module:env['SWI_WASM_TEST_HOST']=str(a.host_module.resolve())
@@ -39,6 +42,17 @@ def main():
         for label,command in plans:
             rows.append(run(label,command,env,root,a.report))
             (a.report/'results.json').write_text(json.dumps(dict(source=manifest['source'],native_integration=bool(a.native_root),host_integration=bool(env.get('SWI_WASM_TEST_HOST')),runs=rows),indent=2)+'\n')
+    if a.browser_executable:
+        class QuietHandler(SimpleHTTPRequestHandler):
+            def log_message(self,*args):pass
+        server=ThreadingHTTPServer(('127.0.0.1',0),partial(QuietHandler,directory=str(root/'web')))
+        thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            env['CHROME_PATH']=str(a.browser_executable.resolve())
+            env['RUNTIME_URL']='http://127.0.0.1:'+str(server.server_port)+'/'
+            rows.append(run('session-api-browser',[node,'tests/wasm/swi_wasm_sessions_browser.cjs'],env,root,a.report))
+            (a.report/'results.json').write_text(json.dumps(dict(source=manifest['source'],native_integration=bool(a.native_root),host_integration=bool(env.get('SWI_WASM_TEST_HOST')),runs=rows),indent=2)+'\n')
+        finally:server.shutdown();server.server_close();thread.join()
     verify(root)
     return int(any(row['exit_code'] for row in rows))
 if __name__=='__main__':sys.exit(main())

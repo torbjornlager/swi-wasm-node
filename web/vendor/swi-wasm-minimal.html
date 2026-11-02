@@ -19,7 +19,7 @@
 let node, compatibility;
 const status=document.getElementById('status'),output=document.getElementById('output');
 function event(e){if(e.type==='output'||e.type==='statechart_trace')output.textContent+=e.type+': '+e.data+'\n';}
-function create(){return SwiWasmNode.create({
+function create(mode){return SwiWasmNode.create({mode:mode||'worker',
   workerUrl:new URL('../swi_wasm_actor_worker.js',location.href).href,
   engineUrl:new URL('../swipl-bundle.js',location.href).href,
   prologBaseUrl:new URL('../wasm/',location.href).href,
@@ -45,13 +45,11 @@ document.getElementById('checks').onclick=()=>action(async()=>{
 });
 document.getElementById('compatibility').onclick=()=>action(async()=>{
   if(compatibility)throw new Error('Reload the page before initializing another compatibility engine');
-  compatibility=create();compatibility.isSwiWasm2Mode=false;
-  await compatibility.initSwiWasmSession();
-  require(!!compatibility.swiWasmProlog.query('current_module(dom),X is 6*7').once(),'independent compatibility engine and DOM library');
-  await compatibility.loadSwiWasmMainSource('compatibility_value(42).');
-  const answers=[];
-  await compatibility.driveSwiWasmMainQuery('compatibility_value(X)',answer=>answers.push(answer));
-  require(answers.length===1&&answers[0].X===42,'independent compatibility source and query driver');
+  compatibility=create('main');
+  await compatibility.open({source:'compatibility_value(42).'});
+  require((await compatibility.query('current_module(dom),X is 6*7')).data[0].X==='42','main session API and DOM library');
+  const answer=await compatibility.query('compatibility_value(X)');
+  require(answer.type==='success'&&answer.data.length===1&&answer.data[0].X==='42','main session source and query');
   const ref=window.swiPromiseStart('data:text/plain,success([ok],false).',1);
   try {
     const collector=window.swiPromiseClaim(ref);
