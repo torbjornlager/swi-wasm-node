@@ -223,7 +223,10 @@ function scopedWorkerCoordinator(W, owner = PID) {
   for(const [name,next] of Object.entries(methods))host[name]=workbenchMethod(name,next);
   host.swiWasmReservedWorkerActorPids={};host.swiWasmActorNames={};host.swiWasmActorServices={};
   host.swiWasmBehaviourProlog=()=>behaviourSource;
-  host.resolveSwiWasmActorTarget=text=>String(text).replace(/^@\((\d+),\s*localhost\)$/, '$1').replace(/@localhost$/,'');
+  host.resolveSwiWasmActorTarget=text=>{
+    const pid=String(text).replace(/^@\((\d+),\s*localhost\)$/, '$1').replace(/@localhost$/,'');
+    return host.swiWasmActorNames[pid] || host.swiWasmActorServices[pid] || pid;
+  };
   let nextPid=7000000000,nextRef=8900000000;
   host.reserveSwiWasmActorRef=()=>String(nextRef++);
   host.reserveSwiWasmWorkerActorPid=watcher=>{const pid=String(nextPid++);host.swiWasmReservedWorkerActorPids[pid]=true;if(watcher!==undefined)host.trackSwiWasmStartup(watcher,pid);return pid;};
@@ -3012,7 +3015,10 @@ async function runExternalContractCases(mode, cases) {
   try {
     for(const c of cases) {
       const t=Date.now();let row={id:c.id,title:c.title};
-      try {row.observation=await run(c.goal);row.status='pass';}
+      try {
+        if (c.source) await run("setup_call_cleanup(open('/conformance_source.pl',write,Out),format(Out,'~s',["+JSON.stringify(c.source)+"]),close(Out)),swi_wasm_actor_bridge:load_private_source('/conformance_source.pl')");
+        row.observation=await run(c.goal);row.status='pass';
+      }
       catch(e) {row.status='fail';row.detail=String(e&&e.message||e);}
       row.duration_ms=Date.now()-t;results.push(row);
     }
