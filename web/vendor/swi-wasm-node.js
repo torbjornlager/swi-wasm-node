@@ -7,6 +7,25 @@
   else root.SwiWasmNode = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function() {
   "use strict";
+      // Browser RPC must retain a visitor capability even when third-party
+      // cookies are unavailable. Use a different capability for each origin;
+      // never put it in a URL or forward one received from another node.
+      var rpcQueryOwners = new Map();
+      function rpcQueryHeaders(url) {
+        var target = new URL(url, typeof window !== "undefined" && window.location ? window.location.origin : "http://localhost");
+        if (!/\/call$/.test(target.pathname)) return {};
+        var token = rpcQueryOwners.get(target.origin);
+        if (!token) {
+          var provider = typeof globalThis !== "undefined" && globalThis.crypto;
+          if (!provider || !provider.getRandomValues) throw new Error("Secure random query identity is unavailable");
+          var bytes = provider.getRandomValues(new Uint8Array(32));
+          token = Array.from(bytes, function(value) { return value.toString(16).padStart(2, "0"); }).join("");
+          if (rpcQueryOwners.size >= 256) rpcQueryOwners.delete(rpcQueryOwners.keys().next().value);
+          rpcQueryOwners.set(target.origin, token);
+        }
+        return {"X-Web-Prolog-Query-Owner": token};
+      }
+
       function normalizeNodeUrl(url) {
         if (typeof url !== "string" || url.trim() === "") {
           return null;
@@ -388,6 +407,8 @@
               console.log("[SWI-RPC] GET", url);
               var xhr = new XMLHttpRequest();
               xhr.open("GET", url, false);
+              var queryHeaders = rpcQueryHeaders(url);
+              Object.keys(queryHeaders).forEach(function(name) { xhr.setRequestHeader(name, queryHeaders[name]); });
               try {
                 xhr.send();
                 console.log("[SWI-RPC] status", xhr.status, "len", xhr.responseText.length);
@@ -415,6 +436,7 @@
                 ? setTimeout(function() { controller.abort(); }, timeout * 1000)
                 : null;
               var request = fetch(url, {
+                headers: rpcQueryHeaders(url),
                 credentials: "same-origin",
                 signal: controller.signal
               }).then(function(response) {
@@ -447,6 +469,8 @@
             window._swi_rpc_get = function(url) {
               var xhr = new XMLHttpRequest();
               xhr.open("GET", url, false);
+              var queryHeaders = rpcQueryHeaders(url);
+              Object.keys(queryHeaders).forEach(function(name) { xhr.setRequestHeader(name, queryHeaders[name]); });
               try { xhr.send(); return xhr.responseText; }
               catch(e) { return null; }
             };
@@ -472,7 +496,7 @@
                   ? setTimeout(function() { controller.abort(); }, timeout*1000) : null;
                 var promise;
                 try {
-                  promise = fetch(url, {signal:controller.signal}).then(function(response) { return response.text(); })
+                  promise = fetch(url, {signal:controller.signal,headers:rpcQueryHeaders(url)}).then(function(response) { return response.text(); })
                     .catch(function() { return controller.signal.aborted
                       ? "error(rpc_error(http_timeout))." : "error(rpc_error(fetch_failed))."; })
                     .finally(function() { if (timer !== null) clearTimeout(timer); });
@@ -1253,6 +1277,7 @@
             return Promise.resolve().then(function() {
               if (controller.signal.aborted) throw new Error("promise request disposed");
               return fetch(url.href, {
+              headers: rpcQueryHeaders(url.href),
               credentials: "same-origin",
               signal: controller.signal
             }); }).then(function(response) {
@@ -4667,7 +4692,7 @@
 
   return {
     create:create, createState:createState, methods:methods,
-    helpers:{splitTopLevelArgs:splitTopLevelArgs,unwrapPrologCompound:unwrapPrologCompound,stripRuntimeErrorScaffolding:stripRuntimeErrorScaffolding,exceptionDisplayTerm:exceptionDisplayTerm,sanitizeDownReasonTerm:sanitizeDownReasonTerm,normalizeNodeUrl:normalizeNodeUrl,isLoopbackHost:isLoopbackHost,
+    helpers:{rpcQueryHeaders:rpcQueryHeaders,splitTopLevelArgs:splitTopLevelArgs,unwrapPrologCompound:unwrapPrologCompound,stripRuntimeErrorScaffolding:stripRuntimeErrorScaffolding,exceptionDisplayTerm:exceptionDisplayTerm,sanitizeDownReasonTerm:sanitizeDownReasonTerm,normalizeNodeUrl:normalizeNodeUrl,isLoopbackHost:isLoopbackHost,
       resolveBrowserRpcBaseUri:resolveBrowserRpcBaseUri,resolveBrowserRpcLoadUri:resolveBrowserRpcLoadUri,
       parseSwiWasmQualifiedServiceAddress:parseSwiWasmQualifiedServiceAddress,
       qualifySwiWasmLocalPid:qualifySwiWasmLocalPid,localizeSwiWasmPid:localizeSwiWasmPid}

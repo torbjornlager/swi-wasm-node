@@ -32,7 +32,7 @@ def main():
     rows=[]
     with tempfile.TemporaryDirectory(prefix='wasm-runtime-tests-') as temporary:
         wasm=Path(temporary)/'wasm';shutil.copytree(root/'web/wasm',wasm);shutil.copy2(root/'tests/fixtures/wasm/shared_db.pl',wasm/'shared_db.pl');env['WP_WASM_SOURCE_DIR']=str(wasm)
-        plans=[('worker-mailbox',[node,'tests/wasm/swi_wasm_actor_worker_smoke.js']),('standalone',[node,'tests/wasm/swi_wasm_standalone.js']),('semantic-contracts',[node,'tests/wasm/swi_wasm_contracts.js'])]
+        plans=[('query-owner',[node,'tests/wasm/http_query_owner.cjs']),('worker-mailbox',[node,'tests/wasm/swi_wasm_actor_worker_smoke.js']),('standalone',[node,'tests/wasm/swi_wasm_standalone.js']),('semantic-contracts',[node,'tests/wasm/swi_wasm_contracts.js'])]
         if not a.javascript_only:
             plans.insert(0,('schema-equivalence',[sys.executable,'tools/check_statechart_wasm_equivalence.py','--wasm-dir',str(root/'web/wasm')]+(['--native-root',str(a.native_root.resolve())] if a.native_root else [])))
             if a.swipl:plans.insert(0,('statechart-unit',[a.swipl,'-f','none','-q','-p','browser_prolog='+str(wasm),'-s','tests/test_statechart_wasm.pl','-g','swi_wasm_statechart_tests:run','-t','halt']))

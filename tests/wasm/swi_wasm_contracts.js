@@ -631,7 +631,7 @@ function compatibilityClientHarness() {
     if(calls.hold)return new Promise(resolve=>{calls.complete=()=>resolve({text:()=>Promise.resolve("success([done],false)")});});
     return Promise.resolve({text:()=>Promise.resolve("success([-(ok,ok)],false)")});
   };
-  Function("self","window","fetch",text)(host,global.self,fetchMock);
+  Function("self","window","fetch","rpcQueryHeaders",text)(host,global.self,fetchMock,runtime.helpers.rpcQueryHeaders);
   const wait=global.self.swiPromiseWait;
   global.self.swiPromiseWait=(...args)=>{calls.wait++;return wait(...args);};
   return calls;
@@ -642,7 +642,7 @@ function compatibilityClientHarness() {
 // so isolation must not depend on random reference values being distinct.
 function isolatedPromiseEngine(mode) {
   const vm=require("vm"), requests=[];
-  const context=vm.createContext({setTimeout,clearTimeout,AbortController,console});
+  const context=vm.createContext({setTimeout,clearTimeout,AbortController,console,rpcQueryHeaders:runtime.helpers.rpcQueryHeaders});
   context.self=context;context.window=context;
   if(mode==="main")context.document={}; // Page loads only the shared factory.
   context.crypto={getRandomValues:bytes=>{bytes.fill(0);return bytes;}};

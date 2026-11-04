@@ -1,0 +1,11 @@
+"use strict";
+const assert = require("node:assert/strict");
+const headers = require("../../web/vendor/swi-wasm-node.js").helpers.rpcQueryHeaders;
+const token = headers("https://n1.example/call?offset=0")["X-Web-Prolog-Query-Owner"];
+assert.match(token, /^[a-f0-9]{64}$/);
+assert.equal(headers("https://n1.example/call?offset=1")["X-Web-Prolog-Query-Owner"], token);
+assert.notEqual(headers("https://n2.example/call")["X-Web-Prolog-Query-Owner"], token);
+assert.deepEqual(headers("https://n1.example/source.pl"), {});
+for(let i=0;i<256;i++) headers(`https://peer${i}.example/call`);
+assert.notEqual(headers("https://n1.example/call")["X-Web-Prolog-Query-Owner"], token);
+console.log("Browser RPC ownership: OS randomness, stable paging, separate destinations and bounded state passed");
