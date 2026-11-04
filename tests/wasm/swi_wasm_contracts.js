@@ -173,6 +173,7 @@ function installServerMonitorCoordinator(W) {
 // plumbing is adapted to Node worker_threads; coordinator methods are unmodified.
 function scopedWorkerCoordinator(W, owner = PID) {
   const {Worker: NodeWorker} = require("worker_threads");
+  if (!global.window.location) global.window.location={origin:"https://example.org"};
   const threads=new Set();
   const host=serverMonitorCoordinator(text=>deliver(W,text));
   host.options={}; host.created=[]; host.killed=[]; host.calls=0;
@@ -207,7 +208,7 @@ function scopedWorkerCoordinator(W, owner = PID) {
     swiWasmWorkerScopeKey:"openSwiWasmWorkerScope", openSwiWasmWorkerScope:"reserveSwiWasmScopedWorker",
     reserveSwiWasmScopedWorker:"spawnSwiWasmScopedWorker",spawnSwiWasmScopedWorker:"releaseSwiWasmScopedWorker",
     releaseSwiWasmScopedWorker:"closeSwiWasmWorkerScopes",closeSwiWasmWorkerScopes:"closeSwiWasmWorkerScope",closeSwiWasmWorkerScope:"spawnSwiWasmWorkerActor",
-    spawnSwiWasmWorkerActor:"spawnSwiWasmWorkerActorReady",spawnSwiWasmWorkerActorReady:"swiWasmRemoteNodeUrl",
+    spawnSwiWasmWorkerActor:"spawnSwiWasmWorkerActorReady",spawnSwiWasmWorkerActorReady:"swiWasmRemoteNodeUrl",swiWasmRemoteNodeUrl:"loadSwiWasmUriSource",
     spawnSwiWasmStatechartActor:"disposeSwiWasmPromiseRequest",whereisSwiWasmActorName:"swiWasmActorPidLive",
     disposeSwiWasmPromiseRequest:"requestSwiWasmWorkerRpc",
     handleSwiWasmWorkerActorMessage:"handleSwiWasmActorRequest",handleSwiWasmActorRequest:"requestSwiWasmActorInput",
@@ -270,10 +271,10 @@ function spawnOptionCases(main=false) {
     ["[link(true)|_]","instantiation_error"], ["[link(true)|bad]","type_error(list,_)"],
     ["[_]","instantiation_error"], ["[link]","domain_error(spawn_option,link)"],
     ["[link(true,false)]","domain_error(spawn_option,link(true,false))"],
-    ["[link(_)]","instantiation_error"], ["[link(maybe)]","type_error(boolean,maybe)"],
-    ["[link(true),link(0)]","type_error(boolean,0)"], ["[monitor(_)]","instantiation_error"],
-    ["[monitor(1)]","type_error(boolean,1)"], ["[node(_)]","instantiation_error"],
-    ["[node(42)]","type_error(atom_or_string,42)"], ["[name(_)]","instantiation_error"],
+    ["[link(_)]","instantiation_error"], ["[link(maybe)]","domain_error(boolean,maybe)"],
+    ["[link(true),link(0)]","type_error(atom,0)"], ["[monitor(_)]","instantiation_error"],
+    ["[monitor(1)]","type_error(atom,1)"], ["[node(_)]","instantiation_error"],
+    ["[node(42)]","type_error(atom,42)"], ["[name(_)]","instantiation_error"],
     ["[name(compound(x))]","type_error(atom,compound(x))"],
     ["[target(_)]","instantiation_error"], ["[io_target(_)]","instantiation_error"],
     ["[src_text(p(a))]","type_error(atom_or_string,p(a))"],
@@ -288,8 +289,8 @@ function spawnOptionCases(main=false) {
     ["[monitor_ref(42)]","domain_error(spawn_option,monitor_ref(42))"],
     ["[src_text('fact(ok).'),unknown(1)]","domain_error(spawn_option,unknown(1))"]
   ];
-  cases.push(["[src_uri(_)]","instantiation_error"], ["[src_uri(42)]","type_error(atom_or_string,42)"],
-    ["[src_uri('https://example.org/source.pl'),src_uri(42)]","type_error(atom_or_string,42)"],
+  cases.push(["[src_uri(_)]","instantiation_error"], ["[src_uri(42)]","type_error(atom,42)"],
+    ["[src_uri('https://example.org/source.pl'),src_uri(42)]","type_error(atom,42)"],
     ["[src_uri('https://example.org/source.pl'),unknown(1)]","domain_error(spawn_option,unknown(1))"]);
   // Validate the whole list even when a remote dispatch is selected.
   return cases.concat(cases.slice(1).map(([opts,err])=>["[node('https://example.org')|"+opts+"]",err]));
@@ -321,8 +322,9 @@ function spawnOptionMainHarness() {
   const calls=[];let next=7200000000,nextRef=8900000000;const mailbox=[],monitors=[];
   function record(action,args,result){calls.push({action,args});return result;}
   Object.assign(global.self,{
+    swiWasmSetDocumentBase:base=>{global.self.swiStatechartDocumentBase=base;return true;},
     swiWasmNamedChartStarted:()=>true,
-    swiWasmNamedChartStopped:()=>true,
+    swiWasmNamedChartStopped:()=>{global.self.swiStatechartDocumentBase="";return true;},
     swiWasmSyncChartStatus:()=>true,
     swiWasmNameToken:()=>"mock-name",
     swiWasmNameReserve:(...args)=>Promise.resolve(record("name_reserve",args,"reserved")),
@@ -376,9 +378,9 @@ const invalidChildSpecs = [
   ["[child(a,[start(true),restart(sometimes)])]", "type_error(oneof(_),sometimes)"],
   ["[child(a,[start(true),type(other)])]", "type_error(oneof(_),other)"],
   ["[child(a,[start(true),shutdown(-1)])]", "domain_error(supervisor_child_shutdown,-1)"],
-  ["[child(a,[start(true),significant(maybe)])]", "type_error(boolean,maybe)"],
+  ["[child(a,[start(true),significant(maybe)])]", "domain_error(boolean,maybe)"],
   ["[child(a,[start(true),unknown(1)])]", "domain_error(spawn_option,unknown(1))"],
-  ["[child(a,[start(true),monitor(maybe)])]", "type_error(boolean,maybe)"],
+  ["[child(a,[start(true),monitor(maybe)])]", "domain_error(boolean,maybe)"],
   ["[child(a,[start(true)]),child(a,[start(true)])]", "permission_error(duplicate,supervisor_child_id,a)"],
   ["[child(a,[start(server(_,[]))])]", "instantiation_error"],
   ["[child(a,[start(server(cb,[initial_state(_),unknown(1)]))])]", "domain_error(spawn_option,unknown(1))"],
@@ -397,7 +399,7 @@ async function childSpecContract(run, check, sideEffects, main) {
   check(await run("Specs=[child(a,[start(start_sub_supervisor(Specs,[]))])],catch((supervisor_spawn(Specs,_),fail),error(representation_error(cyclic_term),_),Caught=true),Caught==true"),"recursive child specification rejected");
   check(sideEffects()===0,"all invalid initial/dynamic specs rejected before any transport or startup");
   const b="swi_wasm_actor_bridge:";
-  check(await run("S=sup(one_for_one,1,5,[],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[])),error(error(missing_start_option(a),_)),S,After),After==S,"+b+"wasm_handle_supervisor_call(count_children,counts(0,0),After,After)"),"malformed receiver request leaves supervisor responsive and unchanged");
+  check(await run("S=sup(one_for_one,1,5,[],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[])),error(error(missing_start_option(a),_)),S,After),After==S,"+b+"wasm_handle_supervisor_call(count_children,[specs-0,active-0,supervisors-0,workers-0],After,After)"),"malformed receiver request leaves supervisor responsive and unchanged");
   check(await run("S=sup(one_for_one,1,5,[child(a,pid,child(a,[start(true)]))],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[start(true)])),error(already_present),S,After),After==S"),"duplicate dynamic ID rejected without spawning");
   check(sideEffects()===0,"receiver validation and duplicates have no startup side effects");
   const valid="Specs=[child(a,[start(goal(X)),start(other(X)),restart(temporary),restart(permanent),shutdown(0.25),type(worker),significant(false),src_list([fact(X)])]),child(b,[start(server(cb,[initial_state(X),initial_state(other),name(first),name(second)]))]),child(c,[start(start_sub_supervisor([child(n,[start(goal(X))])],[strategy(rest_for_one),intensity(0),period(0.25)])),type(supervisor),shutdown(infinity)]),child(d,[start(true),shutdown(brutal_kill)])]";
@@ -429,7 +431,7 @@ async function supervisorNotificationContract(run, check) {
     "send(Self,down(7000000000,8000000000,true)),"+
     "send(Self,'$sup'(Self,78,which_children)),send(Self,'$sup'(Self,79,stop)),"+
     b+"wasm_supervisor_loop(State),"+
-    "receive({77-Before->true}),Before==[child(guarded,7000000000,Spec)],"+
+    "receive({77-Before->true}),Before==[info(guarded,7000000000,worker,temporary)],"+
     "receive({78-After->true}),After==[],receive({79-true->true}),"+
     "nb_current('$supervisor_child_monitors',[])";
   check(await run(goal),"loop ignores unspecified/wrong/retired identities, accepts its exact monitor, and prunes retired records");
@@ -504,16 +506,16 @@ async function supervisorOrderContract(run, events, check) {
   }
   check(await run(seed+b+"wasm_handle_down(202,killed,sup(one_for_one,10,5,Children,[]),S1),S1=sup(_,_,_,[child(a,101,_),child(b,P1,_),child(c,303,_)],_),"+b+"wasm_handle_down(P1,killed,S1,S2),S2=sup(_,_,_,[child(a,101,_),child(b,P2,_),child(c,303,_)],_),P2\\==P1"),"repeated restarts retain position");
   let before=events();
-  check(await run(seed+"S0=sup(one_for_one,10,5,Children,[]),"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S0,S1),S1=sup(_,_,_,[child(a,101,A),child(b,undefined,B),child(c,303,C)],[]),"+b+"wasm_handle_supervisor_call(count_children,counts(3,2),S1,S1),"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S1,Same),Same==S1,"+b+"wasm_handle_down(202,shutdown,S1,Same),"+b+"wasm_handle_supervisor_call(delete_child(a),error(running),S1,Same),"+b+"wasm_handle_supervisor_call(restart_child(c),error(running),S1,Same),"+b+"wasm_handle_supervisor_call(start_child(B),error(already_present),S1,Same),"+b+"wasm_handle_supervisor_call(which_children,Info,S1,S1),S1=sup(_,_,_,Stored,_),Info==Stored,var(X),"+b+"wasm_handle_supervisor_call(restart_child(b),ok,S1,S2),S2=sup(_,_,_,[child(a,101,A),child(b,NewPid,SavedB),child(c,303,C)],[]),SavedB==B,var(X),NewPid\\==202,"+b+"wasm_handle_supervisor_call(count_children,counts(3,3),S2,S2),"+b+"wasm_handle_down(202,shutdown,S2,Same2),Same2==S2,"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S2,S3),"+b+"wasm_handle_supervisor_call(delete_child(b),ok,S3,S4),S4=sup(_,_,_,[child(a,101,A),child(c,303,C)],[]),"+b+"wasm_handle_supervisor_call(count_children,counts(2,2),S4,S4)"),"terminate/count/respawn/delete preserve records, reply formats and variable sharing");
+  check(await run(seed+"S0=sup(one_for_one,10,5,Children,[]),"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S0,S1),S1=sup(_,_,_,[child(a,101,A),child(b,undefined,B),child(c,303,C)],[]),"+b+"wasm_handle_supervisor_call(count_children,[specs-3,active-2,supervisors-0,workers-2],S1,S1),"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S1,Same),Same==S1,"+b+"wasm_handle_down(202,shutdown,S1,Same),"+b+"wasm_handle_supervisor_call(delete_child(a),error(running),S1,Same),"+b+"wasm_handle_supervisor_call(restart_child(c),error(running),S1,Same),"+b+"wasm_handle_supervisor_call(start_child(B),error(already_present),S1,Same),"+b+"wasm_handle_supervisor_call(which_children,Info,S1,S1),Info==[info(a,101,worker,permanent),info(b,undefined,worker,permanent),info(c,303,worker,permanent)],var(X),"+b+"wasm_handle_supervisor_call(restart_child(b),ok(NewPid),S1,S2),S2=sup(_,_,_,[child(a,101,A),child(b,NewPid,SavedB),child(c,303,C)],[]),SavedB==B,var(X),NewPid\\==202,"+b+"wasm_handle_supervisor_call(count_children,[specs-3,active-3,supervisors-0,workers-3],S2,S2),"+b+"wasm_handle_down(202,shutdown,S2,Same2),Same2==S2,"+b+"wasm_handle_supervisor_call(terminate_child(b),ok,S2,S3),"+b+"wasm_handle_supervisor_call(delete_child(b),ok,S3,S4),S4=sup(_,_,_,[child(a,101,A),child(c,303,C)],[]),"+b+"wasm_handle_supervisor_call(count_children,[specs-2,active-2,supervisors-0,workers-2],S4,S4)"),"terminate/count/respawn/delete preserve records, reply formats and variable sharing");
   let after=events();
   check(after.spawn.length-before.spawn.length===1&&after.exit.length-before.exit.length===2,"idempotent termination and running/duplicate rejections have no extra side effects");
   for(const op of ["terminate_child","delete_child","restart_child"])check(await run("S=sup(one_for_one,1,5,[],[]),"+b+"wasm_handle_supervisor_call("+op+"(missing),error(not_found),S,T),T==S"),op+" preserves missing-child reply");
   before=events();
-  check(await run("Spec=child(stopped,[start(goal(X)),restart(transient)]),"+b+"wasm_handle_down(202,true,sup(one_for_one,10,5,[child(stopped,202,Spec)],[]),S1),S1=sup(_,_,_,[child(stopped,undefined,Saved)],[]),Saved==Spec,var(X),"+b+"wasm_handle_supervisor_call(count_children,counts(1,0),S1,S1),"+b+"wasm_handle_supervisor_call(restart_child(stopped),ok,S1,S2),S2=sup(_,_,_,[child(stopped,Pid,Again)],[]),Again==Spec,nonvar(Pid),var(X)"),"successful transient child retains its specification and can respawn");
+  check(await run("Spec=child(stopped,[start(goal(X)),restart(transient)]),"+b+"wasm_handle_down(202,true,sup(one_for_one,10,5,[child(stopped,202,Spec)],[]),S1),S1=sup(_,_,_,[child(stopped,undefined,Saved)],[]),Saved==Spec,var(X),"+b+"wasm_handle_supervisor_call(count_children,[specs-1,active-0,supervisors-0,workers-0],S1,S1),"+b+"wasm_handle_supervisor_call(restart_child(stopped),ok(Pid),S1,S2),S2=sup(_,_,_,[child(stopped,Pid,Again)],[]),Again==Spec,nonvar(Pid),var(X)"),"successful transient child retains its specification and can respawn");
   check(events().spawn.length-before.spawn.length===1,"transient success starts no replacement until explicit respawn");
-  for(const reason of ["true","killed"])check(await run("Spec=child(temp,[start(true),restart(temporary)]),"+b+"wasm_handle_down(202,"+reason+",sup(one_for_one,10,5,[child(temp,202,Spec)],[]),S),S=sup(_,_,_,[],[]),"+b+"wasm_handle_supervisor_call(count_children,counts(0,0),S,S)"),"temporary child removed after "+reason);
+  for(const reason of ["true","killed"])check(await run("Spec=child(temp,[start(true),restart(temporary)]),"+b+"wasm_handle_down(202,"+reason+",sup(one_for_one,10,5,[child(temp,202,Spec)],[]),S),S=sup(_,_,_,[],[]),"+b+"wasm_handle_supervisor_call(count_children,[specs-0,active-0,supervisors-0,workers-0],S,S)"),"temporary child removed after "+reason);
   before=events();
-  check(await run(seed+"Stopped=[child(a,undefined,A),child(b,202,B),child(c,303,C)],"+b+"wasm_handle_down(202,killed,sup(rest_for_one,10,5,Stopped,[]),State),State=sup(_,_,_,[child(a,undefined,A),child(b,_,B),child(c,_,C)],[_]),"+b+"wasm_handle_supervisor_call(count_children,counts(3,2),State,State),"+b+"wasm_stop_child_list([child(a,undefined,A)])"),"rest_for_one preserves an earlier inactive child and stopping skips undefined pids");
+  check(await run(seed+"Stopped=[child(a,undefined,A),child(b,202,B),child(c,303,C)],"+b+"wasm_handle_down(202,killed,sup(rest_for_one,10,5,Stopped,[]),State),State=sup(_,_,_,[child(a,undefined,A),child(b,_,B),child(c,_,C)],[_]),"+b+"wasm_handle_supervisor_call(count_children,[specs-3,active-2,supervisors-0,workers-2],State,State),"+b+"wasm_stop_child_list([child(a,undefined,A)])"),"rest_for_one preserves an earlier inactive child and stopping skips undefined pids");
   after=events();check(JSON.stringify(after.exit.slice(before.exit.length))===JSON.stringify(["303"]),"inactive records never receive exit signals");
 }
 
@@ -526,8 +528,8 @@ function wrapperOptionCases(kind, main=false) {
   let cases=spawnOptionCases(main).filter(([opts])=>!(kind==="server"&&opts.includes("initial_state("))&&
     !(kind==="supervisor"&&opts.includes("strategy("))&&!(kind==="statechart"&&opts.includes("src_uri(")));
   const specific={
-    toplevel:[["[session(_)]","instantiation_error"],["[session(maybe)]","type_error(boolean,maybe)"],
-      ["[session(true),session(1)]","type_error(boolean,1)"],
+    toplevel:[["[session(_)]","instantiation_error"],["[session(maybe)]","domain_error(boolean,maybe)"],
+      ["[session(true),session(1)]","type_error(atom,1)"],
       ["[time_limit(_)]","instantiation_error"],["[time_limit(0)]","domain_error(time_limit,0)"],
       ["[time_limit(1),time_limit(-1)]","domain_error(time_limit,-1)"],
       ["[idle_limit(_)]","instantiation_error"],["[idle_limit(0)]","domain_error(idle_limit,0)"],
@@ -540,11 +542,11 @@ function wrapperOptionCases(kind, main=false) {
       ["[intensity(1.5)]","type_error(nonneg,1.5)"],["[period(_)]","instantiation_error"],
       ["[period(0)]","domain_error(supervisor_period,0)"],["[period(fast)]","type_error(number,fast)"],
       ["[period(0.5),period(-1)]","domain_error(supervisor_period,-1)"]],
-    statechart:[["[trace(_)]","instantiation_error"],["[trace(maybe)]","type_error(boolean,maybe)"],
-      ["[trace(true),trace(1)]","type_error(boolean,1)"],["[src_uri(_)]","instantiation_error"],
-      ["[src_uri(42)]","type_error(atom_or_string,42)"],
+    statechart:[["[trace(_)]","instantiation_error"],["[trace(maybe)]","domain_error(boolean,maybe)"],
+      ["[trace(true),trace(1)]","type_error(atom,1)"],["[src_uri(_)]","instantiation_error"],
+      ["[src_uri(42)]","type_error(atom,42)"],
       ["[src_uri('https://example.org/chart.xml'),unknown(1)]","domain_error(spawn_option,unknown(1))"],
-      ["[src_text('<invalid/>'),trace(maybe)]","type_error(boolean,maybe)"],
+      ["[src_text('<invalid/>'),trace(maybe)]","domain_error(boolean,maybe)"],
       ["[src_text('<invalid/>'),src_text(42)]","type_error(atom_or_string,42)"]]
   }[kind];
   return cases.concat(specific,specific.map(([opts,err])=>["[node('https://example.org')|"+opts+"]",err]));
@@ -557,6 +559,7 @@ function wrapperWorkerReplies(W) {
   spawnOptionWorkerReplies(W);const previous=W.control.reply;
   W.control.reply=m=>{
     if(m.action==="remote_toplevel_spawn")return {result:"8800000000@'https://example.org'"};
+    if(m.action==="statechart_document")return {result:"document("+JSON.stringify(simpleChart)+','+JSON.stringify(String(m.uri).replace(/^'|'$/g,''))+')'};
     if(m.action==="statechart_spawn")return {result:"7300000000"};
     return previous(m);
   };
@@ -586,14 +589,14 @@ function clientOptionCases() {
       ["[http_timeout(fast)]","type_error(number,fast)"], ["[http_timeout(_)]","instantiation_error"],
       ["[src_text(p(a))]","type_error(atom_or_string,p(a))"],
       ["[src_text([112,46])]","type_error(atom_or_string,[112,46])"],
-      ["[src_uri(42)]","type_error(atom_or_string,42)"], ["[src_uri(_)]","instantiation_error"],
+      ["[src_uri(42)]","type_error(atom,42)"], ["[src_uri(_)]","instantiation_error"],
       ["[src_list(bad)]","type_error(list,bad)"], ["[src_list([p|_])]","instantiation_error"],
       ["[src_predicates([p])]","type_error(predicate_indicator,p)"],
       ["[src_predicates([p/(-1)])]","type_error(nonneg,-1)"],
       ["[src_predicates([P/1])]","instantiation_error"],
-      ["[authorization(bearer(token))]","domain_error("+kind+"_option,authorization(bearer(token)))"],
-      ["[request_header('X-Test'=value)]","domain_error("+kind+"_option,request_header('X-Test'=value))"],
-      ["[user_agent(test)]","domain_error("+kind+"_option,user_agent(test))"],
+      ["[authorization(digest(user,password))]","domain_error(http_authorization,digest(user,password))"],
+      ["[request_header(bad)]","type_error(http_request_header,bad)"],
+      ["[user_agent(42)]","type_error(atom_or_string,42)"],
       ["[src_uri('https://example.org/source.pl'),unknown(1)]","domain_error("+kind+"_option,unknown(1))"]
     ])cases.push({kind,options,error});
   }
@@ -738,19 +741,19 @@ async function supervisorStartupContract(run,host,check) {
   host.monitorSwiWasmActor(host.swiWasmActorWorkers.main?"main":PID,before.at(-1),"8989898989");
   const monitors=host.swiWasmActorMonitors.length;
   for(const [goal,error] of [["startup_fail","error(child_spawn_failed(attempt,startup_fail),wasm_start_child/3)"],["startup_fault","startup_original"],["startup_after_spawn","startup_after_spawn_error"],["startup_monitor_fault","startup_monitor_error"],["startup_js_fault","error(supervisor_startup_error(_),supervisor_spawn/3)"]]) {
-    check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start("+goal+"),link(false)]),Reply),Reply=error("+error+"),supervisor_count_children(Sup,counts(1,1))"),"dynamic "+goal+" returns original error and preserves supervisor state");
+    check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start("+goal+"),link(false)]),Reply),Reply=error("+error+"),supervisor_count_children(Sup,[specs-1,active-1,supervisors-0,workers-1])"),"dynamic "+goal+" returns original error and preserves supervisor state");
     check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(before)),"dynamic "+goal+" reclaims only its attempted child");
     check(host.swiWasmActorMonitors.length===monitors&&Object.keys(host.swiWasmStartups||{}).length===0,"dynamic "+goal+" leaves no new monitor or journal");
   }
   const exit=host.exitSwiWasmActor;
   host.exitSwiWasmActor=function(...args){exit.apply(this,args);throw new Error("cleanup_secondary");};
   try {
-    check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start(startup_after_spawn),link(false)]),error(startup_after_spawn_error)),supervisor_count_children(Sup,counts(1,1))"),"secondary cleanup error does not replace startup error");
+    check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start(startup_after_spawn),link(false)]),error(startup_after_spawn_error)),supervisor_count_children(Sup,[specs-1,active-1,supervisors-0,workers-1])"),"secondary cleanup error does not replace startup error");
   } finally {host.exitSwiWasmActor=exit;}
   check(host.swiWasmActorMonitors.some(m=>m.ref==="8989898989"),"unrelated explicit monitor survives failed additions");
-  check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start(server(startup_callback,[name(stable),src_text('startup_callback(_,S,ok,S).')])),link(false)]),error(error(permission_error(register,actor_name,stable),_))),supervisor_count_children(Sup,counts(1,1))"),"server wrapper collision returns the name error before creation");
+  check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start(server(startup_callback,[name(stable),src_text('startup_callback(_,S,ok,S).')])),link(false)]),error(error(permission_error(register,actor_name,stable),_))),supervisor_count_children(Sup,[specs-1,active-1,supervisors-0,workers-1])"),"server wrapper collision returns the name error before creation");
   check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(before)),"server name collision leaves no new actor");
-  check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start("+idle+"),link(false)]),ok),supervisor_count_children(Sup,counts(2,2)),supervisor_which_children(Sup,[child(stable,A,_),child(attempt,B,_)]),supervisor_halt(Sup),exit(A,kill),exit(B,kill)"),"failed id is reusable and successful dynamic addition retains ordering and ok reply");
+  check(await run("user:startup_sup(Sup),supervisor_spawn_child(Sup,child(attempt,[start("+idle+"),link(false)]),ok),supervisor_count_children(Sup,[specs-2,active-2,supervisors-0,workers-2]),supervisor_which_children(Sup,[info(stable,A,_,_),info(attempt,B,_,_)]),supervisor_halt(Sup),exit(A,kill),exit(B,kill)"),"failed id is reusable and successful dynamic addition retains ordering and ok reply");
   check(await until(()=>host.live().length===0),"test actors stopped");
 }
 
@@ -760,13 +763,13 @@ async function supervisorRestartContract(run,host,check) {
   for(const strategy of ["one_for_one","one_for_all","rest_for_one"]) {
     for(const [mode,reason] of [["fail","error(child_spawn_failed(c,restart_probe(fail)),wasm_start_child/3)"],["throw","restart_original"],["after","restart_after_error"],["monitor","restart_monitor_error"]]) {
       const crash=strategy==="one_for_one"?"C":"B";
-      check(await run("supervisor_spawn([child(a,[start(receive({never->true})),link(false)]),child(b,[start(receive({never->true})),link(false)]),child(c,[start(restart_probe("+mode+")),link(false)])],Sup,[strategy("+strategy+"),link(false)]),supervisor_which_children(Sup,[child(a,_,_),child(b,B,_),child(c,C,_)]),monitor(Sup,SR),send(Sup,arm_restart),exit("+crash+",kill),receive({down(Sup,SR,restart_failed(c,"+reason+"))->true}),receive({'$supervisor_failed'(Sup,_)->Stale=true},[timeout(0),on_timeout(Stale=false)]),Stale==false"),strategy+" "+mode+" reports failed replacement without stale startup report");
+      check(await run("supervisor_spawn([child(a,[start(receive({never->true})),link(false)]),child(b,[start(receive({never->true})),link(false)]),child(c,[start(restart_probe("+mode+")),link(false)])],Sup,[strategy("+strategy+"),link(false)]),supervisor_which_children(Sup,[info(a,_,_,_),info(b,B,_,_),info(c,C,_,_)]),monitor(Sup,SR),send(Sup,arm_restart),exit("+crash+",kill),receive({down(Sup,SR,restart_failed(c,"+reason+"))->true}),receive({'$supervisor_failed'(Sup,_)->Stale=true},[timeout(0),on_timeout(Stale=false)]),Stale==false"),strategy+" "+mode+" reports failed replacement without stale startup report");
       check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(baseline)),strategy+" "+mode+" rolls back replacements and stops detached siblings");
       check(Object.keys(host.swiWasmStartups||{}).length===0&&host.swiWasmActorMonitors.length===1,"only unrelated monitor remains after restart failure");
     }
   }
   for(const [mode,reason] of [["fail","error(child_spawn_failed(c,restart_probe(fail)),wasm_start_child/3)"],["throw","restart_original"],["after","restart_after_error"],["monitor","restart_monitor_error"]]) {
-    check(await run("supervisor_spawn([child(c,[start(restart_probe("+mode+")),link(false)])],Sup,[link(false)]),supervisor_terminate_child(Sup,c,ok),send(Sup,arm_restart),supervisor_respawn_child(Sup,c,error("+reason+")),supervisor_count_children(Sup,counts(1,0)),send(Sup,disarm_restart),supervisor_respawn_child(Sup,c,ok),supervisor_count_children(Sup,counts(1,1)),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),"explicit "+mode+" failure preserves inactive record, reply and retry");
+    check(await run("supervisor_spawn([child(c,[start(restart_probe("+mode+")),link(false)])],Sup,[link(false)]),supervisor_terminate_child(Sup,c,ok),send(Sup,arm_restart),supervisor_respawn_child(Sup,c,error("+reason+")),supervisor_count_children(Sup,[specs-1,active-0,supervisors-0,workers-0]),send(Sup,disarm_restart),supervisor_respawn_child(Sup,c,ok(_)),supervisor_count_children(Sup,[specs-1,active-1,supervisors-0,workers-1]),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),"explicit "+mode+" failure preserves inactive record, reply and retry");
     check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(baseline)),"explicit failed attempt and successful retry leave no actors");
   }
   check(await run("user:restart_unrelated(U,UR),U!stop,receive({down(U,UR,true)->true})"),"unrelated actor and explicit monitor survive all failures");
@@ -1099,8 +1102,141 @@ async function synchronousToplevelContract(run,host,check) {
   check(await run("self(Self),spawn(receive({'$call'(_,_)->exit(sync_down)}),D,[link(false)]),catch((toplevel_call_synch(D,true,_),fail),toplevel_down(sync_down),true),Self!kept(data),user:sync_pid(P),toplevel_call_synch(P,true,success(P,[true],false)),receive({kept(data)->true}),monitor(P,MP),toplevel_halt(P),receive({down(P,MP,_)->true}),user:sync_other(Other,OR),Other!stop,receive({down(Other,OR,true)->true})"),"termination reported and unrelated actor, monitor and message preserved");
   check(await until(()=>host.live().length===0)&&host.swiWasmActorMonitors.length===0,"synchronous tests leave no actors or monitors");
 }
+async function rpcHeaderContract(W,check,main) {
+  const requests=[],originalFetch=global.fetch;
+  let host,engine,run;
+  function fetchPeer(url,options={}) {
+    const parsed=new URL(url),goal=parsed.searchParams.get("goal")||"";
+    requests.push({url:parsed,headers:options.headers||{}});
+    if(parsed.pathname==="/source.pl")return Promise.resolve({ok:true,text:async()=>"helper(ok)."});
+    const body=goal.includes("fixture_pages") ? (parsed.searchParams.get("offset")==="0" ? "success([v(a)],true)." : "success([v(b)],false).") : "success([v(ok)],false).";
+    return Promise.resolve({ok:true,text:async()=>body});
+  }
+  try {
+    global.resolveBrowserRpcBaseUri=runtime.helpers.resolveBrowserRpcBaseUri;
+    global.resolveBrowserRpcLoadUri=runtime.helpers.resolveBrowserRpcLoadUri;
+    global.window.location={origin:"https://example.org"};
+    if(main) {
+      const body=runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0];
+      const source=Function(body).call({swiWasmBehaviourProlog:()=>behaviourSource});
+      engine=await require(path.join(ROOT,"web/swipl-bundle.js"))({arguments:["-q","--nosignals"]});
+      engine.FS.writeFile("/rpc_deadlines.pl",source);engine.prolog.query("use_module('/rpc_deadlines.pl')").once();
+      global.self.encodeURIComponent=encodeURIComponent;
+      global.self.swiResolveRpcBase=runtime.helpers.resolveBrowserRpcBaseUri;
+      global.self.swiResolveRpcLoadUri=runtime.helpers.resolveBrowserRpcLoadUri;
+      global.self.swiEnsureFinalFullStop=text=>String(text).replace(/\.?$/,'.');
+      global.self.swiRpcGet=url=>{requests.push({url:new URL(runtime.helpers.resolveBrowserRpcLoadUri(url),"https://example.org"),headers:{}});return "helper(ok).";};
+      const asyncText=runtimeSource.slice(runtimeSource.indexOf("            window.swiRpcGetAsync = function"),runtimeSource.indexOf("            window.swiAbortRpc = function"));
+      Function("window","fetch",asyncText)(global.self,fetchPeer);
+      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+      let next=8100000000;
+      Function("self","window","fetch",storeText)({makeBrowserPromiseRef:()=>String(next++)},global.self,fetchPeer);
+      global.self.setTimeout=setTimeout;global.self.clearTimeout=clearTimeout;
+      run=async goal=>{let count=0;await engine.prolog.forEach(goal,()=>count++);return count===1;};
+    } else {
+      host=scopedWorkerCoordinator(W);
+      host.requestSwiWasmWorkerRpc=workbenchMethod("requestSwiWasmWorkerRpc","swiWasmRemoteWsUrl");
+      host.loadSwiWasmUriSource=workbenchMethod("loadSwiWasmUriSource","loadSwiWasmStatechartSource");
+      host.swiWasmRemoteNodeUrl=x=>String(x).replace(/^\'|\'$/g,"");
+      await startToplevel(W);global.fetch=fetchPeer;
+      run=async goal=>{
+        const replies=()=>W.sends.filter(m=>m.to===CLIENT).map(m=>m.message),n=replies().length;
+        deliver(W,"'$call'(("+goal+"->R=checked;R=wrong),[template(R)])");
+        await until(()=>replies().length>n,5000);const answer=replies()[n]||"";
+        if(!/\[checked\],false\)/.test(answer))console.log(answer);
+        return /\[checked\],false\)/.test(answer);
+      };
+    }
+    {const first=requests.length;check(await run("rpc('https://example.org',X=ok,[request_header('X-Empty'=[]),request_header('X-List'=['狐','狸'])]),X==ok"),"empty and Unicode character-list fields");
+    const bytes=Buffer.from('狐狸','utf8').toString('latin1');check(requests.length===first+1&&requests[first].headers['x-empty']===''&&requests[first].headers['x-list']===bytes,"character-list fields normalize to wire bytes");}
+    {const first=requests.length;check(await run("rpc('https://example.org',X=ok,[request_header('X-Test'='狐狸')]),X==ok"),"Unicode HTTP field");
+    const bytes=Buffer.from('狐狸','utf8').toString('latin1');check(requests.length===first+1&&requests[first].headers['x-test']===bytes,"Unicode HTTP fields use UTF-8 bytes");}
+    {const first=requests.length;check(await run("rpc('https://example.org',X=ok,[request_header('X-Test'=[v,a,l,u,e])]),X==ok"),"character-list request field");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"x-test": "value"}).every(([k,v])=>r.headers[k]===v)),"character-list request field reaches fetch");}
+    {const first=requests.length;check(await run("findall(X,rpc('https://example.org',fixture_pages(X),[limit(1),request_header('X-Test'=first),request_header('x-test'=later),authorization(bearer(first)),request_header('Authorization'=later),user_agent(agent),request_header('User-Agent'=later)]),[a,b])"),"first field precedence retained on every page");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"x-test": "first", "authorization": "Bearer first", "user-agent": "agent"}).every(([k,v])=>r.headers[k]===v)),"first field precedence retained on every page reaches fetch");}
+    {const first=requests.length;check(await run("promise('https://example.org',X=ok,Ref,[template(v(X)),request_header('Authorization'='Custom first'),authorization(bearer(later)),request_header('User-Agent'=first),user_agent(later)]),yield(Ref,success([v(ok)],false)),var(X)"),"explicit fields precede promise aliases");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"authorization": "Custom first", "user-agent": "first"}).every(([k,v])=>r.headers[k]===v)),"explicit fields precede promise aliases reaches fetch");}
+    {const first=requests.length;check(await run("rpc('https://example.org',X=ok,[authorization(basic(user,\"password\"))]),X==ok"),"Basic authentication");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"authorization": "Basic dXNlcjpwYXNzd29yZA=="}).every(([k,v])=>r.headers[k]===v)),"Basic authentication reaches fetch");}
+    {const first=requests.length;check(await run("promise('https://example.org',X=ok,Ref,[template(v(X)),authorization(basic('r\u00e4v','p\u00e4ss'))]),yield(Ref,success([v(ok)],false))"),"UTF-8 Basic authentication in promise");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"authorization": "Basic csOkdjpww6Rzcw=="}).every(([k,v])=>r.headers[k]===v)),"UTF-8 Basic authentication in promise reaches fetch");}
+    {const first=requests.length;check(await run("rpc('https://example.org',X=ok,[request_header('X-Empty'='')]),X==ok"),"explicit empty field");
+    check(requests.length>first&&requests.slice(first).every(r=>Object.entries({"x-empty": ""}).every(([k,v])=>r.headers[k]===v)),"explicit empty field reaches fetch");}
+    {const first=requests.length;
+    check(await run("rpc('https://example.org',helper(X),[src_uri('https://n1.elfenbenstornet.se/source.pl'),authorization(bearer(secret)),request_header('X-Test'=rpc_only)]),X==ok"),"source fetched independently");
+    check(requests.length===first+2&&Object.keys(requests[first].headers).length===0&&requests[first+1].headers.authorization==="Bearer secret","RPC fields stay out of source fetching");}
+  } finally {global.fetch=originalFetch;if(host)await host.stop();}
+}
+async function rpcDeadlineContract(W,check,main) {
+  const requests=[],originalFetch=global.fetch;
+  let host,engine,run;
+  function fetchPeer(url,options={}) {
+    const parsed=new URL(url),goal=parsed.searchParams.get("goal")||"";
+    requests.push(parsed);
+    const aborted=()=>new Promise((resolve,reject)=>{
+      if(options.signal.aborted)reject(new Error("aborted"));
+      else options.signal.addEventListener("abort",()=>reject(new Error("aborted")),{once:true});
+    });
+    if(goal.includes("fixture_headers"))return aborted();
+    return Promise.resolve({ok:true,text:()=>{
+      if(goal.includes("fixture_body"))return aborted();
+      if(goal.includes("fixture_resource"))return Promise.resolve("error(error(resource_error(time),fixture)).");
+      if(goal.includes("fixture_pages"))return new Promise(resolve=>setTimeout(()=>resolve(parsed.searchParams.get("offset")==="0"?"success([v(a)],true).":"success([v(b)],false)."),20));
+      return Promise.resolve("success([v(ok)],false).");
+    }});
+  }
+  try {
+    global.resolveBrowserRpcBaseUri=runtime.helpers.resolveBrowserRpcBaseUri;
+    global.window.location={origin:"https://example.org"};
+    if(main) {
+      const body=runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0];
+      const source=Function(body).call({swiWasmBehaviourProlog:()=>behaviourSource});
+      engine=await require(path.join(ROOT,"web/swipl-bundle.js"))({arguments:["-q","--nosignals"]});
+      engine.FS.writeFile("/rpc_deadlines.pl",source);engine.prolog.query("use_module('/rpc_deadlines.pl')").once();
+      global.self.encodeURIComponent=encodeURIComponent;
+      global.self.swiResolveRpcBase=runtime.helpers.resolveBrowserRpcBaseUri;
+      global.self.swiResolveRpcLoadUri=x=>x;
+      global.self.swiEnsureFinalFullStop=text=>String(text).replace(/\.?$/,'.');
+      global.self.swiRpcGet=()=>"helper(ok).";
+      const asyncText=runtimeSource.slice(runtimeSource.indexOf("            window.swiRpcGetAsync = function"),runtimeSource.indexOf("            window.swiAbortRpc = function"));
+      Function("window","fetch",asyncText)(global.self,fetchPeer);
+      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+      let next=8100000000;
+      Function("self","window","fetch",storeText)({makeBrowserPromiseRef:()=>String(next++)},global.self,fetchPeer);
+      global.self.setTimeout=setTimeout;global.self.clearTimeout=clearTimeout;
+      run=async goal=>{let count=0;await engine.prolog.forEach(goal,()=>count++);return count===1;};
+    } else {
+      host=scopedWorkerCoordinator(W);
+      host.requestSwiWasmWorkerRpc=workbenchMethod("requestSwiWasmWorkerRpc","swiWasmRemoteWsUrl");
+      await startToplevel(W);global.fetch=fetchPeer;
+      run=async goal=>{
+        const replies=()=>W.sends.filter(m=>m.to===CLIENT).map(m=>m.message),n=replies().length;
+        deliver(W,"'$call'(("+goal+"->R=checked;R=wrong),[template(R)])");
+        await until(()=>replies().length>n,5000);const answer=replies()[n]||"";
+        if(!/\[checked\],false\)/.test(answer))console.log(answer);
+        return /\[checked\],false\)/.test(answer);
+      };
+    }
+    const uri="'https://example.org'";
+    check(await run("rpc("+uri+",X=ok,[timeout(-2),timeout(4),http_timeout(1),http_timeout(0)]),X==ok"),"independent limits use first occurrence; negative execution request becomes zero");
+    check(requests.at(-1).searchParams.get("timeout")==="0"&&!requests.at(-1).searchParams.has("http_timeout"),"only execution limit reaches the destination query");
+    check(await run("rpc('https://example.org/prefix/',X=ok,[http_timeout(1)]),X==ok"),"node URI deployment path is retained");
+    check(requests.at(-1).pathname==="/prefix/call","HTTP request uses the prefixed call endpoint");
+    check(await run("rpc("+uri+",X=ok,[http_timeout(0.001)]),X==ok"),"completed HTTP reply is not timed out during later browser scheduling");
+    for(const phase of ["headers","body"]) {
+      check(await run("catch((rpc("+uri+",fixture_"+phase+"(X),[http_timeout(0.03)]),fail),error(rpc_error(http_timeout),_),Caught=true),Caught==true,var(X),rpc("+uri+",Y=ok),Y==ok"),phase+" deadline reports common transport error and allows a following request");
+      check(await run("promise("+uri+",fixture_"+phase+"(X),Ref,[template(v(X)),http_timeout(0.03)]),yield(Ref,error(error(rpc_error(http_timeout),_)),[timeout(2)]),var(X),catch((yield(Ref,_),fail),error(existence_error(promise,Ref),_),true)"),phase+" promise yields transport error answer, consumes its reference and preserves goal variables");
+    }
+    const before=requests.length;
+    check(await run("catch((rpc("+uri+",true,[http_timeout(-1)]),fail),error(rpc_error(http_timeout),_),Caught=true),Caught==true,promise("+uri+",true,Ref,[http_timeout(0)]),yield(Ref,error(error(rpc_error(http_timeout),_)))"),"zero transport limit completes RPC and promise with common errors");
+    check(requests.length===before,"zero transport limit starts no fetch");
+    check(await run("findall(X,rpc("+uri+",fixture_pages(X),[limit(1),http_timeout(0.03)]),[a,b])"),"each page receives a fresh request deadline");
+    check(await run("catch((rpc("+uri+",fixture_resource,[timeout(0.2),http_timeout(1)]),fail),error(resource_error(time),fixture),Caught=true),Caught==true,promise("+uri+",fixture_resource,Ref,[timeout(0.2),http_timeout(1)]),yield(Ref,error(error(resource_error(time),fixture)))"),"remote execution errors keep their original terms in RPC and promise answers");
+  } finally {global.fetch=originalFetch;if(host)await host.stop();}
+}
 async function supervisorWaitContract(run,host,check) {
-  check(await run("self(Self),Self!unrelated(kept),spawn(receive({stop->true}),U,[link(false)]),monitor(U,UR),assertz(user:wait_unrelated(U,UR)),supervisor_spawn([],Sup,[link(false)]),assertz(user:wait_sup(Sup)),supervisor_count_children(Sup,counts(0,0))"),"successful supervisor reply retains browser format");
+  check(await run("self(Self),Self!unrelated(kept),spawn(receive({stop->true}),U,[link(false)]),monitor(U,UR),assertz(user:wait_unrelated(U,UR)),supervisor_spawn([],Sup,[link(false)]),assertz(user:wait_sup(Sup)),supervisor_count_children(Sup,[specs-0,active-0,supervisors-0,workers-0])"),"successful supervisor reply uses common count format");
   const baseline=host.swiWasmActorMonitors.length;
   check(await run("user:wait_sup(Sup),\\+supervisor_count_children(Sup,wrong),receive({unrelated(kept)->true})"),"mismatched output consumes reply and fails without consuming unrelated messages");
   check(host.swiWasmActorMonitors.length===baseline,"success and mismatch withdraw only private monitors");
@@ -1114,15 +1250,17 @@ async function supervisorWaitContract(run,host,check) {
     check(await run("user:wait_sup(Sup),catch((supervisor_count_children(Sup,_),fail),E,(term_string(E,T),(sub_string(T,_,_,_,supervisor_send_original)->true;Message:=workerTestError(#E),Message==supervisor_send_original)))"),"send exception retains original error");
     check(host.swiWasmActorMonitors.length===baseline,"send exception withdraws private monitor");
   } finally {host.sendSwiWasmActorMessage=send;}
-  check(await run("user:wait_sup(Sup),supervisor_count_children(Sup,counts(0,0)),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true}),user:wait_unrelated(U,UR),U!stop,receive({down(U,UR,true)->true})"),"supervisor remains usable and unrelated explicit monitor still delivers");
+  check(await run("user:wait_sup(Sup),supervisor_count_children(Sup,[specs-0,active-0,supervisors-0,workers-0]),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true}),user:wait_unrelated(U,UR),U!stop,receive({down(U,UR,true)->true})"),"supervisor remains usable and unrelated explicit monitor still delivers");
   check(await until(()=>host.live().length===0)&&host.swiWasmActorMonitors.length===0,"request tests leave no actors or monitors");
 }
 async function supervisorHaltContract(run,host,check) {
+  check(await run("self(Self),make_ref(Ref),make_ref(Mon),Self!down(Self,Mon,halt_abnormal),Self!(Ref-ok),get_time(Now),swi_wasm_actor_bridge:wasm_supervisor_halt_wait(Self,Ref,Mon,Now,pending),receive({down(Self,Mon,halt_abnormal)->true})"),"queued halt acknowledgement has precedence over an earlier abnormal down");
+  check(await run("self(Self),make_ref(Ref),make_ref(Mon),Self!down(Self,Mon,true),get_time(Now),catch((swi_wasm_actor_bridge:wasm_supervisor_halt_wait(Self,Ref,Mon,Now,pending),fail),supervisor_down(true),true),get_time(After),After-Now<1"),"normal down preserves an expired deadline and reports missing acknowledgement");
   check(await run("self(Self),Self!reply(true),spawn(receive({stop->true}),U,[link(false)]),monitor(U,UR),supervisor_spawn([child(waiter,[start(receive({never->true})),link(false)])],Sup,[link(false)]),monitor(Sup,SR),supervisor_halt(Sup),receive({reply(true)->true}),receive({down(Sup,SR,true)->true}),U!stop,receive({down(U,UR,true)->true})"),"tagged halt stops detached child and preserves unrelated reply and monitors");
   check(await run("spawn(receive({'$sup'(_,_,stop)->exit(halt_probe_down)}),P,[link(false)]),monitor(P,Watch),catch((supervisor_halt(P),fail),supervisor_down(halt_probe_down),true),receive({down(P,Watch,halt_probe_down)->true})"),"halt reports observed termination while preserving explicit monitor");
   check(await run("spawn(receive({stop->true}),P,[link(false)]),monitor(P,Watch),catch((supervisor_halt(P),fail),supervisor_call_timeout(P,stop),true),actors(Actors),memberchk(P,Actors),P!stop,receive({down(P,Watch,true)->true})"),"halt timeout does not cancel target or consume its explicit monitor");
   const server="server(shutdown_probe,[initial_state(Parent),src_text("+JSON.stringify(shutdownProbeSource)+")])";
-  check(await run("self(Parent),supervisor_spawn([child(probe,[start("+server+"),shutdown(infinity),link(false)])],Sup,[link(false)]),supervisor_which_children(Sup,[child(probe,P,_)]),monitor(P,Watch),monitor(Sup,SR),server_promise(P,work(10.2,halt_slow),Request),receive({entered(halt_slow)->true}),catch((supervisor_stop(Sup),fail),supervisor_call_timeout(Sup,stop),true),receive({Request-done(halt_slow)->true}),receive({down(P,Watch,true)->true}),receive({down(Sup,SR,true)->true})"),"stop alias timeout leaves infinity-policy shutdown running to completion");
+  check(await run("self(Parent),supervisor_spawn([child(probe,[start("+server+"),shutdown(infinity),link(false)])],Sup,[link(false)]),supervisor_which_children(Sup,[info(probe,P,_,_)]),monitor(P,Watch),monitor(Sup,SR),server_promise(P,work(10.2,halt_slow),Request),receive({entered(halt_slow)->true}),catch((supervisor_stop(Sup),fail),supervisor_call_timeout(Sup,stop),true),receive({Request-done(halt_slow)->true}),receive({down(P,Watch,true)->true}),receive({down(Sup,SR,true)->true})"),"stop alias timeout leaves infinity-policy shutdown running to completion");
   const send=host.sendSwiWasmActorMessage;
   host.sendSwiWasmActorMessage=function(to,text,...rest){if(String(text).includes("$sup"))throw new Error("halt_send_original");return send.call(this,to,text,...rest);};
   try {
@@ -1167,17 +1305,17 @@ async function supervisorExhaustionContract(run,host,check) {
     for(const [policy,delay,reason] of [["1",0.05,"true"],["0.02",2,"shutdown"],["0",2,"shutdown"],["infinity",0.05,"true"],["brutal_kill",2,"kill"]]) {
       const created=host.created.length;
       const answers=reason==="true"?"receive({RA-done(a)->true}),receive({RC-done(c)->true}),":"";
-      check(await run("self(Parent),supervisor_spawn([child(a,[start("+server+"),shutdown("+policy+"),link(false)]),child(b,[start(receive({stop->true})),link(false)]),child(c,[start("+server+"),shutdown("+policy+"),link(false)])],Sup,[strategy("+strategy+"),intensity(0),link(false)]),supervisor_which_children(Sup,[child(a,A,_),child(b,B,_),child(c,C,_)]),monitor(A,MA),monitor(C,MC),monitor(Sup,MS),server_promise(A,work("+delay+",a),RA),server_promise(C,work("+delay+",c),RC),receive({entered(a)->true}),receive({entered(c)->true}),exit(B,killed),receive({down(First,_,R1)->true}),receive({down(Second,_,R2)->true}),[First,Second]==[C,A],R1=="+reason+",R2=="+reason+",receive({down(Sup,MS,shutdown)->true}),"+answers+"true"),strategy+" exhausted budget stops detached children in reverse order with shutdown("+policy+")");
+      check(await run("self(Parent),supervisor_spawn([child(a,[start("+server+"),shutdown("+policy+"),link(false)]),child(b,[start(receive({stop->true})),link(false)]),child(c,[start("+server+"),shutdown("+policy+"),link(false)])],Sup,[strategy("+strategy+"),intensity(0),link(false)]),supervisor_which_children(Sup,[info(a,A,_,_),info(b,B,_,_),info(c,C,_,_)]),monitor(A,MA),monitor(C,MC),monitor(Sup,MS),server_promise(A,work("+delay+",a),RA),server_promise(C,work("+delay+",c),RC),receive({entered(a)->true}),receive({entered(c)->true}),exit(B,killed),receive({down(First,_,R1)->true}),receive({down(Second,_,R2)->true}),[First,Second]==[C,A],R1=="+reason+",R2=="+reason+",receive({down(Sup,MS,shutdown)->true}),"+answers+"true"),strategy+" exhausted budget stops detached children in reverse order with shutdown("+policy+")");
       check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(baseline)),"exhaustion leaves only unrelated actor");
       check(host.created.length===created+4&&host.swiWasmActorMonitors.length===1,"zero budget starts no replacements and preserves unrelated monitor");
     }
     const created=host.created.length;
-    check(await run("self(Parent),supervisor_spawn([child(a,[start(receive({stop->true})),link(false)]),child(b,[start((self(Me),Parent!started(b,Me),receive({stop->true}))),link(false)]),child(c,[start(receive({stop->true})),link(false)])],Sup,[strategy("+strategy+"),intensity(1),period(3600),link(false)]),receive({started(b,B)->true}),monitor(Sup,MS),exit(B,killed),receive({started(b,NewB)->true}),NewB\\==B,supervisor_which_children(Sup,[child(a,_,_),child(b,NewB,_),child(c,_,_)]),exit(NewB,killed),receive({down(Sup,MS,shutdown)->true}),receive({started(b,_)->Extra=true},[timeout(0),on_timeout(Extra=false)]),Extra==false"),strategy+" permits one restart then cleans up on next failure");
+    check(await run("self(Parent),supervisor_spawn([child(a,[start(receive({stop->true})),link(false)]),child(b,[start((self(Me),Parent!started(b,Me),receive({stop->true}))),link(false)]),child(c,[start(receive({stop->true})),link(false)])],Sup,[strategy("+strategy+"),intensity(1),period(3600),link(false)]),receive({started(b,B)->true}),monitor(Sup,MS),exit(B,killed),receive({started(b,NewB)->true}),NewB\\==B,supervisor_which_children(Sup,[info(a,_,_,_),info(b,NewB,_,_),info(c,_,_,_)]),exit(NewB,killed),receive({down(Sup,MS,shutdown)->true}),receive({started(b,_)->Extra=true},[timeout(0),on_timeout(Extra=false)]),Extra==false"),strategy+" permits one restart then cleans up on next failure");
     check(await until(()=>JSON.stringify(host.live().slice().sort())===JSON.stringify(baseline)),"exhaustion after allowed restart reclaims group");
     check(host.created.length===created+4+({one_for_one:1,one_for_all:3,rest_for_one:2})[strategy]&&host.swiWasmActorMonitors.length===1,"replacement count respects strategy and exhausted limit");
   }
   check(await run("get_time(Now),Old is Now-20,swi_wasm_actor_bridge:wasm_note_restart(1,5,[Old],[_]),\\+swi_wasm_actor_bridge:wasm_note_restart(1,5,[Now],_),\\+swi_wasm_actor_bridge:wasm_note_restart(0,5,[],_)"),"period pruning and restart threshold unchanged");
-  check(await run("self(Parent),supervisor_spawn([child(a,[start(receive({stop->true})),link(false)]),child(b,[start(receive({stop->true})),link(false)]),child(c,[start("+server+"),link(false)])],Sup,[intensity(0),link(false)]),supervisor_which_children(Sup,[child(a,A,_),child(b,B,_),child(c,C,_)]),monitor(A,MA),monitor(C,MC),monitor(Sup,MS),assertz(user:exhaustion_fault(Sup,A,B,C,MA,MC,MS))"),"cleanup exception fixture started");
+  check(await run("self(Parent),supervisor_spawn([child(a,[start(receive({stop->true})),link(false)]),child(b,[start(receive({stop->true})),link(false)]),child(c,[start("+server+"),link(false)])],Sup,[intensity(0),link(false)]),supervisor_which_children(Sup,[info(a,A,_,_),info(b,B,_,_),info(c,C,_,_)]),monitor(A,MA),monitor(C,MC),monitor(Sup,MS),assertz(user:exhaustion_fault(Sup,A,B,C,MA,MC,MS))"),"cleanup exception fixture started");
   const send=host.sendSwiWasmActorMessage;
   host.sendSwiWasmActorMessage=function(to,text,...rest){if(String(text).includes("$stop"))throw new Error("exhaustion_cleanup_error");return send.call(this,to,text,...rest);};
   try {
@@ -1203,17 +1341,17 @@ async function supervisorShutdownContract(run,host,check) {
   for(const [tag,option,delay,reason,graceful] of cases) {
     const result=graceful?"receive({completed("+tag+")->true}),receive({Request-done("+tag+")->true})":
       "receive({completed("+tag+")->Unexpected=true},[timeout(0),on_timeout(Unexpected=false)]),Unexpected==false";
-    check(await run("self(Parent),supervisor_spawn([child(probe,[start("+server+")"+option+",link(false)])],Sup),supervisor_which_children(Sup,[child(probe,P,_)]),monitor(P,Watch),monitor(P,Extra),server_promise(P,work("+delay+","+tag+"),Request),receive({entered("+tag+")->true}),supervisor_terminate_child(Sup,probe,ok),receive({down(P,Watch,"+reason+")->true}),receive({down(P,Extra,"+reason+")->true}),"+result+",supervisor_count_children(Sup,counts(1,0)),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),tag+" shutdown preserves reason, reply format, stopped record and explicit monitors");
+    check(await run("self(Parent),supervisor_spawn([child(probe,[start("+server+")"+option+",link(false)])],Sup),supervisor_which_children(Sup,[info(probe,P,_,_)]),monitor(P,Watch),monitor(P,Extra),server_promise(P,work("+delay+","+tag+"),Request),receive({entered("+tag+")->true}),supervisor_terminate_child(Sup,probe,ok),receive({down(P,Watch,"+reason+")->true}),receive({down(P,Extra,"+reason+")->true}),"+result+",supervisor_count_children(Sup,[specs-1,active-0,supervisors-0,workers-0]),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),tag+" shutdown preserves reason, reply format, stopped record and explicit monitors");
     check(await until(()=>host.live().length===0)&&host.swiWasmActorMonitors.length===0,tag+" leaves no actors or monitors");
   }
   // Run the helper in the caller engine to inspect cleanup precisely: ordinary
   // messages, the public server reply and unrelated monitors must all survive.
   check(await run("self(Self),spawn(receive({never->true}),Other,[link(false)]),monitor(Other,OtherRef),server_spawn(shutdown_probe,Self,P,[src_text("+source+")]),monitor(P,Own),Self!reply(true),Self!unrelated(kept),server_promise(P,ping,Request),receive({Request-pong->true}),swi_wasm_actor_bridge:wasm_shutdown_child(child(probe,P,child(probe,[start(server(shutdown_probe,[])),shutdown(1)]))),receive({down(P,Own,true)->true}),receive({reply(true)->true}),receive({unrelated(kept)->true}),receive({down(_,_,_)->Leaked=true},[timeout(0),on_timeout(Leaked=false)]),Leaked==false,receive({_Tag-true->ReplyLeak=true},[timeout(0),on_timeout(ReplyLeak=false)]),ReplyLeak==false,findall(R,swi_wasm_actor_bridge:retiring_supervisor_shutdown(R),[]),exit(Other,kill),receive({down(Other,OtherRef,kill)->true})"),"private monitor/reply cleanup preserves ordinary messages and unrelated monitors");
   check(await until(()=>host.live().length===0)&&host.swiWasmActorMonitors.length===0,"direct helper leaves no resources");
-  check(await run("supervisor_spawn([child(a,[start(receive({never->true})),link(false)]),child(b,[start(receive({never->true})),link(false)]),child(c,[start(receive({never->true})),link(false)])],Sup),supervisor_which_children(Sup,[child(a,A,_),child(b,B,_),child(c,C,_)]),monitor(A,_),monitor(B,_),monitor(C,_),supervisor_halt(Sup),receive({down(First,_,shutdown)->true}),receive({down(Second,_,shutdown)->true}),receive({down(Third,_,shutdown)->true}),[First,Second,Third]==[C,B,A],monitor(Sup,SR),receive({down(Sup,SR,_)->true})"),"supervisor halt stops detached children in reverse start order");
+  check(await run("supervisor_spawn([child(a,[start(receive({never->true})),link(false)]),child(b,[start(receive({never->true})),link(false)]),child(c,[start(receive({never->true})),link(false)])],Sup),supervisor_which_children(Sup,[info(a,A,_,_),info(b,B,_,_),info(c,C,_,_)]),monitor(A,_),monitor(B,_),monitor(C,_),supervisor_halt(Sup),receive({down(First,_,shutdown)->true}),receive({down(Second,_,shutdown)->true}),receive({down(Third,_,shutdown)->true}),[First,Second,Third]==[C,B,A],monitor(Sup,SR),receive({down(Sup,SR,_)->true})"),"supervisor halt stops detached children in reverse start order");
   for(const strategy of ["one_for_all","rest_for_one"]) {
     const same=strategy==="rest_for_one"?"NA==A":"NA\\==A";
-    check(await run("self(Parent),supervisor_spawn([child(a,[start("+server+"),shutdown(1)]),child(b,[start("+server+"),shutdown(1)]),child(c,[start("+server+"),shutdown(1)])],Sup,[strategy("+strategy+"),intensity(5)]),supervisor_which_children(Sup,[child(a,A,_),child(b,B,_),child(c,C,_)]),server_promise(A,work(0.05,a),RA),server_promise(C,work(0.05,c),RC),receive({entered(a)->true}),receive({entered(c)->true}),exit(B,killed),supervisor_which_children(Sup,[child(a,NA,_),child(b,NB,_),child(c,NC,_)]),"+same+",NB\\==B,NC\\==C,receive({RA-done(a)->true}),receive({RC-done(c)->true}),supervisor_count_children(Sup,counts(3,3)),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),strategy+" waits for stopped servers before replacing them in start order");
+    check(await run("self(Parent),supervisor_spawn([child(a,[start("+server+"),shutdown(1)]),child(b,[start("+server+"),shutdown(1)]),child(c,[start("+server+"),shutdown(1)])],Sup,[strategy("+strategy+"),intensity(5)]),supervisor_which_children(Sup,[info(a,A,_,_),info(b,B,_,_),info(c,C,_,_)]),server_promise(A,work(0.05,a),RA),server_promise(C,work(0.05,c),RC),receive({entered(a)->true}),receive({entered(c)->true}),exit(B,killed),supervisor_which_children(Sup,[info(a,NA,_,_),info(b,NB,_,_),info(c,NC,_,_)]),"+same+",NB\\==B,NC\\==C,receive({RA-done(a)->true}),receive({RC-done(c)->true}),supervisor_count_children(Sup,[specs-3,active-3,supervisors-0,workers-3]),monitor(Sup,SR),supervisor_halt(Sup),receive({down(Sup,SR,_)->true})"),strategy+" waits for stopped servers before replacing them in start order");
     check(await until(()=>host.live().length===0)&&host.swiWasmActorMonitors.length===0,strategy+" cleans its private shutdown monitors");
   }
   // A transport exception must unwind the temporary monitor; it does not
@@ -1245,7 +1383,7 @@ function booleanLanguageCases() {
       `toplevel_call(42,true,[once(false),once(${value})])`
     ];
     for(const goal of goals)cases.push({label:goal,
-      goal:`catch((${goal},fail),error(Formal,_),(Formal=type_error(boolean,_);Formal=domain_error(boolean,_)))`});
+      goal:`catch((${goal},fail),error(Formal,_),(Formal=type_error(atom,_);Formal=domain_error(boolean,_)))`});
   }
   cases.push({label:'pending Boolean remains unbound',goal:'catch((toplevel_call(42,true,[once(B)]),fail),error(instantiation_error,_),true),var(B)'});
   return cases;
@@ -1253,18 +1391,17 @@ function booleanLanguageCases() {
 
 function uriLanguageCases() {
   const cases=[];
-  for(const value of ['42','1.5','foo(bar)','[http,t,p]','[104,116,116,112]']) {
+  for(const value of ['42','1.5','foo(bar)','[http,t,p]','[104,116,116,112]','"https://example.org"','localhost:3053','localhost:P']) {
     for(const goal of [`rpc(${value},true,[src_uri('https://example.org/source')])`,
-                        `promise(${value},true,_,[src_uri('https://example.org/source')])`]) {
-      cases.push({label:goal,goal:`catch((${goal},fail),error(type_error(atom_or_string,_),_),true)`});
+                        `promise(${value},true,_,[src_uri('https://example.org/source')])`,
+                        `spawn(true,_,[node(${value})])`,
+                        `spawn(true,_,[src_uri(${value})])`]) {
+      cases.push({label:goal,goal:`catch((${goal},fail),error(type_error(atom,_),_),true),var(P)`});
     }
   }
   cases.push({label:'URI variable not bound',goal:'catch((rpc(U,true),fail),error(instantiation_error,_),true),var(U)'});
-  cases.push({label:'port variable not bound',goal:'catch((promise(localhost:P,true,_),fail),error(instantiation_error,_),true),var(P)'});
-  cases.push({label:'invalid port type',goal:'catch((rpc(localhost:bad,true),fail),error(type_error(integer,bad),_),true)'});
-  cases.push({label:'canonical URI atom and string',goal:`swi_wasm_actor_bridge:browser_uri_atom('https://example.org/é?x=%2F',A),swi_wasm_actor_bridge:browser_uri_atom("https://example.org/é?x=%2F",B),atom(A),A==B`});
-  cases.push({label:'Host:Port shorthand',goal:"swi_wasm_actor_bridge:browser_rpc_uri(localhost:3053,U),U=='http://localhost:3053'"});
-  cases.push({label:'textual localhost',goal:'swi_wasm_actor_bridge:browser_uri_atom("localhost",U),U==localhost'});
+  cases.push({label:'canonical URI atom',goal:`swi_wasm_actor_bridge:browser_uri_atom('https://example.org/é?x=%2F',A),atom(A),A=='https://example.org/é?x=%2F'`});
+  cases.push({label:'local node atom',goal:'swi_wasm_actor_bridge:browser_uri_atom(localhost,U),U==localhost'});
   return cases;
 }
 
@@ -1282,7 +1419,7 @@ function portableTextCases() {
     ['explicit remote source keeps its existing convention', `swi_wasm_actor_bridge:browser_materialized_source([node('http://example.org')],'p("native").',S),S=='p("native").'`],
     ['upgrade reader preserves typed strings and restores characters', `atom_string(native,N),swi_wasm_actor_bridge:collect_spawn_source([src_list([portable_upgrade(N,"chars")])],S),(current_predicate(user:wasm_load_upgrade_source/1)->M=user;M=swi_wasm_actor_bridge),M:wasm_load_upgrade_source(S),portable_upgrade(U,C),string(U),U==N,C=="chars",current_prolog_flag(user:double_quotes,chars),current_prolog_flag(swi_wasm_actor_bridge:double_quotes,string)`],
     ['text option boundary rejects codes and open text without binding', `catch((swi_wasm_actor_bridge:browser_native_text([97],_),fail),error(type_error(atom_or_string,_),_),true),catch((swi_wasm_actor_bridge:browser_native_text([a|Tail],_),fail),error(type_error(atom_or_string,_),_),true),var(Tail)`],
-    ['URI and source text accept character lists and native strings', `swi_wasm_actor_bridge:browser_uri_atom("https://example.org/é",A),atom_string(A,N),swi_wasm_actor_bridge:browser_uri_atom(N,A),swi_wasm_actor_bridge:validate_browser_spawn_options([src_text("p(a)."),src_uri("https://example.org/p"),node("localhost")])`]
+    ['URI atoms remain distinct from flexible source text', `swi_wasm_actor_bridge:browser_uri_atom('https://example.org/é',A),atom(A),swi_wasm_actor_bridge:validate_browser_spawn_options([src_text("p(a)."),src_uri('https://example.org/p'),node(localhost)])`]
   ];
 }
 // Exercise the actual main-engine lazy driver, not output captured in a
@@ -1376,9 +1513,9 @@ const scenarios = {
     check(!W.posted.some(m=>m.type==="request"&&["rpc","src_uri"].includes(m.action)),"invalid destinations trigger neither source fetch nor RPC");
     W.control.reply=m=>({result:m.action==="rpc"?(m.template.includes("-")?"success([-(ok,ok)],false)":"success([v(ok)],false)"):true});
     const n=W.sends.length;
-    deliver(W,`'$call'((rpc("https://example.org",X=ok),promise(localhost:3053,Y=ok,Ref,[template(Y-Y)]),yield(Ref,A),A==success([ok-ok],false),var(Y)),[template(X)])`);
+    deliver(W,`'$call'((rpc('https://example.org',X=ok),promise('http://localhost:3053',Y=ok,Ref,[template(Y-Y)]),yield(Ref,A),A==success([ok-ok],false),var(Y)),[template(X)])`);
     const messages=await nSends(W,n+1);
-    check(/\[ok\],false\)/.test(messages[n]||""),"text destination and authority RPC/promise retain answers and caller independence");
+    check(/\[ok\],false\)/.test(messages[n]||""),"URI atom RPC/promise retain answers and caller independence");
     const requests=W.posted.filter(m=>m.type==="request"&&m.action==="rpc");
     check(requests.length===2&&requests[0].node==="'https://example.org'"&&requests[1].node==="'http://localhost:3053'","Worker sends canonical atom spellings: "+JSON.stringify(requests.map(m=>m.node)));
   },
@@ -1392,7 +1529,7 @@ const scenarios = {
     for(const c of uriLanguageCases()) {let n=0;await engine.prolog.forEach(c.goal,()=>n++);check(n===1,c.label);}
     check(calls.rpc.length===0&&calls.source.length===0&&calls.promise.length===0&&calls.wait===0,"invalid destinations trigger no transport operation");
     const bases=[];global.self.swiResolveRpcBase=uri=>{bases.push(uri);return String(uri);};
-    let n=0;await engine.prolog.forEach(`rpc("https://example.org",X=ok),promise(localhost:3053,Y=ok,Ref,[template(Y-Y)]),yield(Ref,A),A==success([ok-ok],false),var(Y)`,()=>n++);
+    let n=0;await engine.prolog.forEach(`rpc('https://example.org',X=ok),promise('http://localhost:3053',Y=ok,Ref,[template(Y-Y)]),yield(Ref,A),A==success([ok-ok],false),var(Y)`,()=>n++);
     check(n===1&&bases.join("|")==="https://example.org|http://localhost:3053","main receives canonical atom text and preserves promise independence");
   },
   async strict_boolean_options(W, check) {
@@ -1878,7 +2015,7 @@ const scenarios = {
     const m=await nSends(W,5);
     check(m.some(x=>/^-\(901,error\(error\(missing_start_option\(a\)/.test(x)),"malformed request delivers a validation error: "+JSON.stringify(m));
     check(m.some(x=>/^-\(902,error\(error\(missing_start_option\(b\)/.test(x)),"nested invalid request delivers a validation error");
-    check(m.includes("-(903,counts(0,0))"),"supervisor remains responsive with no children after invalid requests");
+    check(m.includes("-(903,[-(specs,0),-(active,0),-(supervisors,0),-(workers,0)])"),"supervisor remains responsive with no children after invalid requests");
     check(m.some(x=>/\[stopped\],false\)/.test(x)),"supervisor loop stops normally after invalid additions");
     check(!W.posted.some(x=>x.type==="request"&&["spawn","reserve_pid","monitor"].includes(x.action)),"invalid additions start no children");
   },
@@ -1912,7 +2049,7 @@ const scenarios = {
     global.self.swiWasmActorReceive=()=>Promise.resolve(mailbox.shift()||null);
     global.self.swiWasmActorSend=(pid,msg)=>{replies.push(msg);return Promise.resolve(true);};
     check(await run("swi_wasm_actor_bridge:wasm_supervisor_loop(sup(one_for_one,1,5,[],[]))"),"main supervisor loop survives malformed addition and stops normally");
-    check(replies.some(x=>/^-\(901,error\(error\(missing_start_option\(a\)/.test(x))&&replies.includes("-(902,counts(0,0))"),"main loop replies with validation error and unchanged child count: "+JSON.stringify(replies));
+    check(replies.some(x=>/^-\(901,error\(error\(missing_start_option\(a\)/.test(x))&&replies.includes("-(902,[-(specs,0),-(active,0),-(supervisors,0),-(workers,0)])"),"main loop replies with validation error and unchanged child count: "+JSON.stringify(replies));
 
     check(calls.some(m=>m.action==="spawn"&&m.args[1].includes("sup(rest_for_one,0,0.25")),"main nested supervisor settings preserved");
   },
@@ -1948,13 +2085,14 @@ const scenarios = {
     const chart="'"+simpleChart+"'";
     await succeeds("statechart_spawn(_,[src_uri('https://example.org/chart.xml'),trace(false),trace(true),src_list([support(ok)]),name(chart_test),monitor(true)])","worker statechart URI and duplicate trace remain supported");
     req=W.posted.filter(m=>m.action==="statechart_spawn").at(-1);
-    check(req.sourceKind==="uri"&&req.source==="https://example.org/chart.xml"&&req.trace===false&&req.supportSource.includes("support(ok)"),"worker URI selection, supplemental source and first trace preserved");
-    await succeeds("statechart_spawn(_,[src_uri('https://example.org/ignored.xml'),src_text("+chart+"),src_text('<ignored/>'),trace(true)])","worker multiple valid sources retain text-first selection");
+    check(req.sourceKind==="text"&&req.source===simpleChart&&req.documentBase==="https://example.org/chart.xml"&&req.trace===false&&req.supportSource.includes("support(ok)"),"worker URI selection, supplemental source and first trace preserved");
+    await succeeds("catch((statechart_spawn(_,[src_uri('https://example.org/ignored.xml'),src_text("+chart+")]),fail),error(domain_error(single_statechart_source_option,_),_),true)","worker rejects multiple XML sources before dispatch");
+    await succeeds("statechart_spawn(_,[src_text("+chart+"),trace(true)])","worker accepts one text document");
     req=W.posted.filter(m=>m.action==="statechart_spawn").at(-1);
     check(req.sourceKind==="text"&&req.source===simpleChart,"worker first text source wins even after URI");
     await succeeds("statechart_spawn(_,[node('https://example.org'),src_uri('https://example.org/remote.xml'),trace(false),io_target(client)])","worker remote statechart URI still accepted");
     req=W.posted.filter(m=>m.action==="remote_spawn").at(-1);
-    check(req.goal.includes("interpret_trace(false")&&req.goal.includes("remote.xml")&&req.goal.includes("with_io_target(client"),"worker remote statechart goal and routing unchanged");
+    check(req.goal.includes("interpret_document_trace(false")&&req.goal.includes("remote.xml")&&req.goal.includes("with_io_target(client"),"worker remote statechart goal and routing unchanged");
   },
   async statechart_invocation_lifecycle(W, check) {
     const body=runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0];
@@ -2009,6 +2147,35 @@ const scenarios = {
     check(await run("statechart_start(text('<statechart version=\"0.2\" initial=\"f\"><final id=\"f\"><onentry>fail</onentry></final></statechart>')),\\+statechart_running,statechart_in(f),statechart_wasm:internal_queue([error(failure(fail))]),statechart_stop"),"top-level final completion does not wait to handle its queued entry error");
   },
   async statechart_monitors_worker(W,check) { await statechartMonitorContract(W,check,false); },
+  async statechart_document_worker(W,check) {
+    const host=scopedWorkerCoordinator(W),fetched=[],remote=[];
+    const base="https://example.org/docs/";
+    global.window.location={origin:"https://example.org"};
+    const parent=`<statechart version="0.2" initial="s"><state id="s"><go on="probe(To)">statechart_spawn(C,[src_uri('child.xml'),trace(false),link(false)]),send(C,probe(To))</go></state></statechart>`;
+    const child=`<statechart version="0.2" initial="s"><state id="s"><go on="probe(To)" to="f">send(To,child_loaded)</go></state><final id="f"/></statechart>`;
+    host.loadSwiWasmAssetSource=async uri=>{fetched.push(uri);if(uri===base+"parent.xml")return parent;if(uri===base+"child.xml")return child;throw new Error("chart_document_fetch_failed");};
+    host.swiWasmRemoteNodeUrl=workbenchMethod("swiWasmRemoteNodeUrl","loadSwiWasmUriSource");
+    host.spawnSwiWasmRemoteActor=async (...args)=>{remote.push(args);return "8800000000@'https://destination.example'";};
+    async function run(goal) {
+      const replies=()=>W.sends.filter(m=>m.to===CLIENT).map(m=>m.message),n=replies().length;
+      deliver(W,"'$call'(("+goal+"->R=checked;R=wrong),[template(R)])");
+      await until(()=>replies().length>n,20000);const reply=replies()[n]||"";
+      if(!/\[checked\],false\)/.test(reply))console.log(reply);
+      return /\[checked\],false\)/.test(reply);
+    }
+    try {
+      await startToplevel(W);
+      check(await run("self(Self),statechart_spawn(P,[src_uri('"+base+"parent.xml'),trace(false),link(false),monitor(true)]),send(P,probe(Self)),receive({child_loaded->true},[timeout(5),on_timeout(throw(missing_relative_child))]),exit(P,kill),receive({down(P,P,kill)->true},[timeout(5),on_timeout(fail)])"),"caller supplies XML and nested relative document resolves against preserved base");
+      check(JSON.stringify(fetched)===JSON.stringify([base+"parent.xml",base+"child.xml"]),"each document is fetched once at its owning caller");
+      check(await run("statechart_spawn(_,[node('https://destination.example'),src_uri('"+base+"parent.xml'),trace(false),link(false)])"),"remote chart accepts caller-fetched document");
+      check(remote.length===1&&remote[0][1].includes("interpret_document_trace(false")&&remote[0][1].includes("statechart_spawn(C")&&remote[0][1].includes(base+"parent.xml"),"remote payload carries XML and document URI together");
+      const created=host.created.length;
+      check(await run("catch((statechart_spawn(P,[src_uri('"+base+"missing.xml'),trace(false),link(false)]),fail),Error,true),nonvar(Error),var(P)"),"document fetch failure is synchronous and preserves the result variable");
+      check(host.created.length===created,"failed initial fetch creates no chart Worker");
+      check(await run("catch((statechart_spawn(_,[src_text('<bad/>'),src_uri('"+base+"missing.xml')]),fail),error(domain_error(single_statechart_source_option,_),_),true)"),"multiple XML sources are rejected before fetching");
+      check(fetched.filter(x=>x===base+"missing.xml").length===1,"invalid source cardinality adds no fetch");
+    } finally {await host.stop();}
+  },
   async compatibility_statechart_routing(W, check) {
     const body=runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0];
     const source=Function(body).call({swiWasmBehaviourProlog:()=>behaviourSource});
@@ -2017,7 +2184,7 @@ const scenarios = {
     check(!!engine.prolog.query("use_module('/compat_routing.pl')").once(),"compatibility runtime loaded");
     check(await loadCompatibilityStatecharts(engine),"real statechart parser/interpreter loaded");
     const calls=spawnOptionMainHarness();
-    global.self.swiResolveAssetUrl=uri=>{calls.push({action:"resolve",uri});return uri;};
+    global.self.swiResolveAssetUrl=uri=>{calls.push({action:"resolve",uri});return new URL(uri,global.self.swiStatechartDocumentBase||"https://example.org/").href;};
     global.self.swiRpcGet=uri=>{calls.push({action:"get",uri});return simpleChart;};
     let next=7400000000;
     global.self.swiWasmStatechartSpawnWorker=(...args)=>{
@@ -2045,8 +2212,8 @@ const scenarios = {
         check(await succeeds("statechart_wasm:statechart_configuration(Before),statechart_spawn(Pid,[node(localhost),"+sourceOption(kind)+",trace(false),trace(true),name(nested_chart),link(false),io_target(child_client),monitor(true),src_list([child_support("+kind+")])]),Pid\\==statechart,statechart_wasm:statechart_configuration(After),Before==After,statechart_wasm:routing_support("+kind+")"),kind+" nested local chart preserves the running parent");
         items=calls.slice(start);let req=items.find(m=>m.action==="statechart");
         check(outgoing(items).length===1&&!!req,kind+" nested chart uses worker path exclusively");
-        check(!!req&&req.args[0]===kind&&req.args[1]===(kind==="text"?simpleChart:"https://example.org/chart.xml")&&req.args[2].includes("child_support("+kind+")")&&req.args[3]===""&&items.some(m=>m.action==="name_reserve"&&m.args[1]==="nested_chart")&&req.args[4]==="false"&&req.args[5]==="child_client"&&req.args[6]==="false",kind+" nested worker receives source, name, link, I/O and first trace");
-        check(!items.some(m=>m.action==="get"),kind+" nested source is passed to worker without main-engine fetching");
+        check(!!req&&req.args[0]==="text"&&req.args[1]===simpleChart&&req.args[7]===(kind==="text"?"":"https://example.org/chart.xml")&&req.args[2].includes("child_support("+kind+")")&&req.args[3]===""&&items.some(m=>m.action==="name_reserve"&&m.args[1]==="nested_chart")&&req.args[4]==="false"&&req.args[5]==="child_client"&&req.args[6]==="false",kind+" nested worker receives source, name, link, I/O and first trace");
+        check(items.filter(m=>m.action==="get").length===(kind==="uri"?1:0),kind+" nested XML is fetched by the caller before Worker dispatch");
         check(!!req&&items.some(m=>m.action==="monitor"&&m.args[0]===req.pid+"@localhost"&&m.args[1]===req.pid+"@localhost"),kind+" nested spawn monitor targets worker pid");
 
         for(const running of [true,false]) {
@@ -2056,11 +2223,20 @@ const scenarios = {
           check(await succeeds("statechart_wasm:statechart_configuration(Before),statechart_spawn(Pid,[node('https://example.org'),"+sourceOption(kind)+",trace(false),trace(true),io_target(remote_client),name(remote_chart),monitor(true),src_list([remote_support("+kind+")])]),Pid=8800000000@'https://example.org',statechart_wasm:statechart_configuration(After),Before==After,"+stateCheck),kind+" explicit remote node preserves local state (running="+running+")");
           items=calls.slice(start);req=items.find(m=>m.action==="remote");
           check(outgoing(items).length===1&&!!req,kind+" remote uses remote path exclusively (running="+running+")");
-          check(!!req&&req.args[0].includes("https://example.org")&&req.args[1].includes(kind==="text"?"interpret_text_trace(false":"interpret_trace(false")&&req.args[1].includes(kind==="text"?simpleChart:"https://example.org/chart.xml")&&req.args[1].includes("with_io_target(remote_client")&&req.args[2].includes("remote_support("+kind+")"),kind+" remote node receives source, support, I/O and first trace (running="+running+")");
-          check(!items.some(m=>m.action==="get"),kind+" remote URI remains for remote node to fetch (running="+running+")");
+          check(!!req&&req.args[0].includes("https://example.org")&&req.args[1].includes(kind==="text"?"interpret_text_trace(false":"interpret_document_trace(false")&&req.args[1].includes(simpleChart)&&(kind==="text"||req.args[1].includes("https://example.org/chart.xml"))&&req.args[1].includes("with_io_target(remote_client")&&req.args[2].includes("remote_support("+kind+")"),kind+" remote node receives source, support, I/O and first trace (running="+running+")");
+          check(items.filter(m=>m.action==="get").length===(kind==="uri"?1:0),kind+" remote XML is fetched by caller before dispatch (running="+running+")");
           check(items.some(m=>m.action==="name_reserve"&&m.args[1]==="remote_chart")&&items.some(m=>m.action==="name_publish"&&m.args[1]==="remote_chart"&&m.args[2].includes("8800000000"))&&items.some(m=>m.action==="monitor"&&m.args[0].includes("8800000000")&&m.args[1]===m.args[0]),kind+" remote name and caller-side monitor retained (running="+running+")");
         }
       }
+      const base="https://example.org/docs/";
+      const relativeParent=`<statechart version="0.2" initial="s"><state id="s"><go on="spawn">statechart_spawn(C,[src_uri('child.xml'),trace(false)])</go></state></statechart>`;
+      global.self.swiRpcGet=uri=>{calls.push({action:"get",uri});return uri===base+"root.xml"?relativeParent:simpleChart;};
+      const start=calls.length;
+      check(await succeeds("statechart_wasm:statechart_stop,statechart_spawn(P,[src_uri('"+base+"root.xml'),trace(false)]),P==statechart,statechart_wasm:statechart_send(spawn),statechart_wasm:statechart_in(s)"),"main chart uses its document base when starting a relative nested chart");
+      const items=calls.slice(start),request=items.find(m=>m.action==="statechart");
+      check(JSON.stringify(items.filter(m=>m.action==="get").map(m=>m.uri))===JSON.stringify([base+"root.xml",base+"child.xml"]),"main caller fetches each relative document once");
+      check(!!request&&request.args[0]==="text"&&request.args[1]===simpleChart&&request.args[7]===base+"child.xml","main passes fetched nested XML and its own base to the Worker");
+      check(await succeeds("statechart_halt(statechart,stopped)"),"main document chart halts normally");
     } finally { await succeeds("statechart_wasm:statechart_stop"); }
   },
   async compatibility_wrapper_options(W, check) {
@@ -2095,9 +2271,10 @@ const scenarios = {
     check(await loadCompatibilityStatecharts(engine),"main real statechart interpreter loaded");
     const chart="'"+simpleChart+"'";
     // Source-selection checks complement the separate three-path routing regression.
-    check(await succeeds("statechart_spawn(_,[src_uri('https://example.org/ignored.xml'),src_text("+chart+"),src_text('<ignored/>'),trace(false),trace(true),src_list([support(ok)])])"),"main chart accepts duplicate sources/trace and supplemental source");
+    check(await succeeds("catch((statechart_spawn(_,[src_uri('https://example.org/ignored.xml'),src_text("+chart+")]),fail),error(domain_error(single_statechart_source_option,_),_),true)"),"main chart rejects multiple XML sources");
+    check(await succeeds("statechart_spawn(_,[src_text("+chart+"),trace(false),trace(true),src_list([support(ok)])])"),"main chart accepts one XML source, duplicate trace and supplemental source");
     check(!calls.some(m=>m.action==="get"),"main text selection does not fetch preceding URI");
-    check(await succeeds("swi_wasm_actor_bridge:statechart_spawn_source([src_uri('https://example.org/ignored.xml'),src_text("+chart+"),src_text('<ignored/>')],text,"+chart+")"),"main first text source wins even after URI");
+    check(await succeeds("catch((swi_wasm_actor_bridge:statechart_spawn_source([src_uri('https://example.org/ignored.xml'),src_text("+chart+")],_,_),fail),error(domain_error(single_statechart_source_option,_),_),true)"),"main XML selection enforces exactly one source");
     check(await succeeds("statechart_wasm:statechart_stop,statechart_spawn(Pid,[src_uri('https://example.org/chart.xml'),trace(false)]),Pid=statechart,statechart_wasm:statechart_in(s)"),"main statechart URI accepted through local dispatch");
     check(await succeeds("statechart_spawn(_,[node('https://example.org'),src_text("+chart+"),trace(false)]),statechart_wasm:statechart_stop"),"main explicit-node chart settings accepted through existing dispatch");
     check(await succeeds("statechart_spawn(_,[node('https://example.org'),src_uri('https://example.org/chart.xml'),trace(false)]),statechart_wasm:statechart_stop"),"main explicit-node URI settings accepted through existing dispatch");
@@ -2133,10 +2310,10 @@ const scenarios = {
     }
     try {
       await startToplevel(W);
-      check(await run("assertz(user:uri_order(copied)),self(Parent),spawn((findall(Item,uri_order(Item),Items),Parent!order(Items)),Child,["+uri("/actor.pl")+",src_list([uri_order(list)]),src_text('uri_order(text1).'),src_predicates([uri_order/1]),"+uri("/actor.pl")+",src_text(\"uri_order(text2).\"),monitor(true)]),receive({order([text1,text2,list,copied,uri,uri])->true}),receive({down(Child,Child,true)->true})"),"real child loads mixed/repeated URI sources after existing Worker source groups");
+      check(await run("assertz(user:uri_order(copied)),self(Parent),spawn((findall(Item,uri_order(Item),Items),Parent!order(Items)),Child,["+uri("/actor.pl")+",src_list([uri_order(list)]),src_text('uri_order(text1).'),src_predicates([uri_order/1]),"+uri("/actor.pl")+",src_text(\"uri_order(text2).\"),monitor(true)]),receive({order([uri,list,text1,copied,uri,text2])->true}),receive({down(Child,Child,true)->true})"),"real child loads mixed and repeated sources in option-list order");
       check(fetched.length===2&&fetched.every(f=>f.options.credentials==="same-origin"),"repeated URIs fetch separately with existing credential policy");
       check(await run("server_spawn(uri_callback,initial,Server,["+uri("/server.pl")+"]),server_request(Server,ping,pong),monitor(Server,Watch),exit(Server,kill),receive({down(Server,Watch,kill)->true})"),"server callback source loads from URI");
-      check(await run("supervisor_spawn([child(probe,[start(server(uri_callback,["+uri("/server.pl")+"]))])],Sup,["+uri("/top.pl")+"]),supervisor_which_children(Sup,[child(probe,Server,_)]),server_request(Server,ping,pong),monitor(Sup,Watch),supervisor_halt(Sup),receive({down(Sup,Watch,true)->true})"),"supervisor and nested child server accept URI source loading");
+      check(await run("supervisor_spawn([child(probe,[start(server(uri_callback,["+uri("/server.pl")+"]))])],Sup,["+uri("/top.pl")+"]),supervisor_which_children(Sup,[info(probe,Server,_,_)]),server_request(Server,ping,pong),monitor(Sup,Watch),supervisor_halt(Sup),receive({down(Sup,Watch,true)->true})"),"supervisor and nested child server accept URI source loading");
       check(await run("toplevel_spawn(Top,[session(true),"+uri("/top.pl")+"]),toplevel_call_synch(Top,uri_value(X),success(Top,[ok],false),[template(X)]),var(X),monitor(Top,Watch),toplevel_halt(Top),receive({down(Top,Watch,_)->true})"),"toplevel URI source executes with independent goal variables");
       const remote=[];
       host.spawnSwiWasmRemoteActor=(_node,goal,source)=>{remote.push({goal,source,fetched:fetched.length});return Promise.resolve("8800000000@'https://example.org'");};
@@ -2237,6 +2414,10 @@ const scenarios = {
     check(starts===0&&waits===0,"invalid options allocate no promise and start no wait");
     check(!W.posted.some(m=>m.type==="request"&&["rpc","src_uri"].includes(m.action)),"invalid options trigger no RPC or source fetch");
   },
+  async rpc_http_fields_worker(W,check) { await rpcHeaderContract(W,check,false); },
+  async compatibility_rpc_http_fields(W,check) { await rpcHeaderContract(W,check,true); },
+  async rpc_request_deadlines_worker(W,check) { await rpcDeadlineContract(W,check,false); },
+  async compatibility_rpc_request_deadlines(W,check) { await rpcDeadlineContract(W,check,true); },
   async rpc_client_valid_options_and_retry(W, check) {
     const requests=[];
     W.control.reply=m=>{
@@ -2244,19 +2425,19 @@ const scenarios = {
       return {result:m.action==="src_uri" ? "uri_fact(ok)." : true};
     };
     await startToplevel(W);
-    deliver(W,"'$call'((assertz(user:client_fact(ok)),promise('https://example.org',p(X),Ref,[template(X-X),template(ignored),offset(2),offset(9),limit(3),limit(8),once(false),once(true),timeout(-2),http_timeout(-3),src_text('first(a).'),src_text(\"second(b).\"),src_list([list_fact(ok)]),src_uri('https://example.org/source.pl'),src_predicates([client_fact/1])]),var(X),yield(Ref,Answer),var(X)),[template(Answer)])");
+    deliver(W,"'$call'((assertz(user:client_fact(ok)),promise('https://example.org',p(X),Ref,[template(X-X),template(ignored),offset(2),offset(9),limit(3),limit(8),once(false),once(true),timeout(-2),http_timeout(3),http_timeout(-3),src_text('first(a).'),src_text(\"second(b).\"),src_list([list_fact(ok)]),src_uri('https://example.org/source.pl'),src_predicates([client_fact/1])]),var(X),yield(Ref,Answer),var(X)),[template(Answer)])");
     let m=await nSends(W,1);
     check(/success\(\[-\(ok,ok\)\],false\)/.test(m[0]||""),"promise template keeps variable sharing: "+m[0]);
     const req=requests[0]||{};
     check(req.offset===2&&req.limit===3&&req.once===false,"first occurrence of duplicate options still wins");
-    check(req.remoteTimeout===0&&req.httpTimeout===0,"negative transport timeouts retain normalization");
+    check(req.remoteTimeout===0&&req.httpTimeout===3,"negative transport timeouts retain normalization");
     check(["first(a)","second(b)","list_fact(ok)","uri_fact(ok)","client_fact(ok)"].every(part=>(req.loadText||"").includes(part)),"repeated and mixed source options remain additive");
     const variable=/p\(([_A-Za-z][A-Za-z0-9_]*)\)/.exec(req.goal||"");
     check(!!variable&&req.template==="-("+variable[1]+","+variable[1]+")","serialized goal and template share the same variable");
     const before=W.sends.length;
-    deliver(W,"'$call'(promise('https://example.org',p,Ref,[timeout(none),http_timeout(none)]),[template(Ref)])");
+    deliver(W,"'$call'(promise('https://example.org',p,Ref),[template(Ref)])");
     await nSends(W,before+1);
-    check(requests[1].remoteTimeout===-1&&requests[1].httpTimeout===-1,"worker unspecified-timeout sentinel preserved");
+    check(requests[1].remoteTimeout===-1&&requests[1].httpTimeout===-1,"worker omission retains backend timeout defaults");
     W.control.hold=["rpc"];
     const next=W.sends.length;
     deliver(W,"'$call'((promise('https://example.org',p,Ref),assertz(user:client_ref(Ref)),catch(yield(Ref,R,[timeout(0),on_timeout(R=bad),unknown(1)]),error(domain_error(yield_option,unknown(1)),_),true),var(R),yield(Ref,Early,[timeout(0),on_timeout(Early=waiting)])),[template(Early)])");
@@ -2291,7 +2472,7 @@ const scenarios = {
     engine.prolog.query("assertz((user:client_option_cycle_test :- (Opts=[limit(1)|Opts],catch((rpc('https://example.org',p,Opts),fail),error(type_error(list,_),context(rpc/3,_)),true))))").once();
     check(await succeeds("user:client_option_cycle_test"),"main-engine rejects cyclic option list");
     check(calls.rpc.length===0&&calls.source.length===0&&calls.promise.length===0&&calls.wait===0,"invalid options cause no network, promise creation or waiting");
-    check(await succeeds("assertz(user:client_fact(ok)),promise('https://example.org',p(X),Ref,[template(X-X),template(ignored),offset(2),offset(9),limit(3),limit(8),once(false),once(true),timeout(-2),http_timeout(-3),src_text('first(a).'),src_text(\"second(b).\"),src_list([list_fact(ok)]),src_uri('https://example.org/source.pl'),src_predicates([client_fact/1])]),var(X),yield(Ref,success([ok-ok],false)),var(X)"),"main-engine valid promise retains template sharing");
+    check(await succeeds("assertz(user:client_fact(ok)),promise('https://example.org',p(X),Ref,[template(X-X),template(ignored),offset(2),offset(9),limit(3),limit(8),once(false),once(true),timeout(-2),http_timeout(3),http_timeout(-3),src_text('first(a).'),src_text(\"second(b).\"),src_list([list_fact(ok)]),src_uri('https://example.org/source.pl'),src_predicates([client_fact/1])]),var(X),yield(Ref,success([ok-ok],false)),var(X)"),"main-engine valid promise retains template sharing");
     const url=new URL(calls.promise[0].url),load=url.searchParams.get("src_text")||"";
     check(url.searchParams.get("offset")==="2"&&url.searchParams.get("limit")==="3"&&!url.searchParams.has("once")&&url.searchParams.get("timeout")==="0","main-engine precedence and timeout normalization preserved");
     check(["first(a)","second(b)","list_fact(ok)","uri_fact(ok)","client_fact(ok)"].every(part=>load.includes(part)),"main-engine additive sources unchanged");
@@ -2601,7 +2782,7 @@ const scenarios = {
       await engine.prolog.forEach(goal,()=>{count++;});
       return count === 1;
     }
-    check(await succeeds("findall(X,swi_wasm_actor_bridge:web_rpc_page(v(X),0,5,'https://example.org',p,'v(X)',[],-1,false,-1),[a,b,c])"),"compatibility paging retains short-page answers");
+    check(await succeeds("findall(X,swi_wasm_actor_bridge:web_rpc_page(v(X),0,5,'https://example.org',p,'v(X)',[],-1,false,-1,''),[a,b,c])"),"compatibility paging retains short-page answers");
     check(JSON.stringify(offsets)==="[0,2]","compatibility paging uses actual length: "+offsets);
     global.self.swiPromiseStart = () => "1234567891";
     global.self.swiPromiseClaim = () => "test_collector";

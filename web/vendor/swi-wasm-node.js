@@ -405,21 +405,25 @@
             // The RPC predicate awaits this promise between pages.  Do not use
             // the synchronous helper above: it would block the browser and
             // make Abort ineffective during an unbounded remote enumeration.
-            window.swiRpcGetAsync = function(url, httpTimeout) {
+            window.swiRpcGetAsync = function(url, httpTimeout, headerText) {
+              if (Number(httpTimeout) === 0) return Promise.resolve("error(error(rpc_error(http_timeout),rpc/3)).");
+              var timedOut = false;
               var controller = new AbortController();
               window.swiRpcAbortController = controller;
               var timeout = httpTimeout === null || httpTimeout === undefined
                 ? NaN
                 : Number(httpTimeout);
               var timer = isFinite(timeout) && timeout >= 0
-                ? setTimeout(function() { controller.abort(); }, timeout * 1000)
+                ? setTimeout(function() { timedOut = true; controller.abort(); }, timeout * 1000)
                 : null;
               var request = fetch(url, {
+                headers: Object.fromEntries(String(headerText || "").split("\n").filter(Boolean).map(function(line) { var i = line.indexOf(": "); return [line.slice(0, i), Array.from(new TextEncoder().encode(line.slice(i + 2)), function(c) { return String.fromCharCode(c); }).join("")]; })),
                 credentials: "same-origin",
                 signal: controller.signal
               }).then(function(response) {
                 return response.text();
               }).then(function(text) {
+                if (timer !== null) { clearTimeout(timer); timer = null; }
                 // A task boundary, rather than only a promise microtask,
                 // lets click handlers run between rapid same-origin pages.
                 return new Promise(function(resolve) {
@@ -431,7 +435,10 @@
                   reject(new Error("RPC aborted"));
                 }, { once: true });
               });
-              return Promise.race([request, cancelled]).finally(function() {
+              return Promise.race([request, cancelled]).catch(function(error) {
+                if (timedOut) return "error(error(rpc_error(http_timeout),rpc/3)).";
+                throw error;
+              }).finally(function() {
                 if (timer !== null) clearTimeout(timer);
                 if (window.swiRpcAbortController === controller) {
                   window.swiRpcAbortController = null;
@@ -457,24 +464,26 @@
               return resolveBrowserRpcLoadUri(uri);
             };
             window.swiResolveAssetUrl = function(uri) {
-              return new URL(String(uri || ""), window.location.origin).href;
+              return new URL(String(uri || ""), window.swiStatechartDocumentBase || window.location.origin).href;
             };
             this.installSwiWasmActorBridge();
             window._swiPromiseStore = createSwiWasmPromiseStore({
               mint: function() { return self.makeBrowserPromiseRef(window._swiPromiseStore.items); },
               errorText: function() { return "error(rpc_error(fetch_failed))."; }
             });
-            window.swiPromiseStart = function(url, httpTimeout) {
+            window.swiPromiseStart = function(url, httpTimeout, headerText) {
               return window._swiPromiseStore.create(function() {
+                if (Number(httpTimeout) === 0) return {promise:Promise.resolve("error(error(rpc_error(http_timeout),rpc/3))."),cancel:function(){}};
+                var timedOut = false;
                 var controller = new AbortController();
                 var timeout = httpTimeout === null || httpTimeout === undefined ? NaN : Number(httpTimeout);
                 var timer = isFinite(timeout) && timeout >= 0
-                  ? setTimeout(function() { controller.abort(); }, timeout*1000) : null;
+                  ? setTimeout(function() { timedOut = true; controller.abort(); }, timeout*1000) : null;
                 var promise;
                 try {
-                  promise = fetch(url, {signal:controller.signal}).then(function(response) { return response.text(); })
-                    .catch(function() { return controller.signal.aborted
-                      ? "error(rpc_error(http_timeout))." : "error(rpc_error(fetch_failed))."; })
+                  promise = fetch(url, {signal:controller.signal, headers: Object.fromEntries(String(headerText || "").split("\n").filter(Boolean).map(function(line) { var i = line.indexOf(": "); return [line.slice(0, i), Array.from(new TextEncoder().encode(line.slice(i + 2)), function(c) { return String.fromCharCode(c); }).join("")]; }))}).then(function(response) { return response.text(); })
+                    .catch(function() { return timedOut
+                      ? "error(error(rpc_error(http_timeout),rpc/3))." : "error(rpc_error(fetch_failed))."; })
                     .finally(function() { if (timer !== null) clearTimeout(timer); });
                 } catch (error) { if (timer !== null) clearTimeout(timer); controller.abort(); throw error; }
                 return {promise:promise, cancel:function() {
@@ -610,12 +619,13 @@
             window.swiWasmNameToken = function() { return "name-" + (self.swiWasmNextName = (self.swiWasmNextName || 0) + 1); };
             window.swiWasmNameReserve = function(token, name) { return Promise.resolve(self.reserveSwiWasmName("main", token, name)); };
             window.swiWasmNamePublish = function(token, name, pid, live) { return Promise.resolve(self.publishSwiWasmName("main", token, name, pid, live)); };
-            window.swiWasmNamedChartStarted = function(live) { self.startSwiWasmLocalChart(live === true || live === "true"); return true; };
-            window.swiWasmNamedChartStopped = function() { self.stopSwiWasmLocalChart("true"); return true; };
+            window.swiWasmSetDocumentBase = function(base) { window.swiStatechartDocumentBase = String(base || ""); return true; };
+            window.swiWasmNamedChartStarted = function(live) { self.startSwiWasmLocalChart(live === true || live === "true"); if (live !== true && live !== "true") window.swiStatechartDocumentBase = ""; return true; };
+            window.swiWasmNamedChartStopped = function() { self.stopSwiWasmLocalChart("true"); window.swiStatechartDocumentBase = ""; return true; };
             window.swiWasmSyncChartStatus = function(live) {
               if (live === true || live === "true") {
                 if (!self.swiWasmStatechartActive) self.startSwiWasmLocalChart(true);
-              } else self.stopSwiWasmLocalChart("true");
+              } else { self.stopSwiWasmLocalChart("true"); window.swiStatechartDocumentBase = ""; }
               return true;
             };
             window.swiWasmNameCommit = function(token, name) { return self.commitSwiWasmName("main", token, name); };
@@ -663,12 +673,12 @@
             };
             window.swiWasmStatechartSpawnWorker = function(sourceKind, sourceText, supportSourceText,
                                                             nameText, linkText,
-                                                            ioTargetText, traceText) {
+                                                            ioTargetText, traceText, documentBase) {
               return self.spawnSwiWasmStatechartActor(
                 sourceKind, sourceText, "statechart", nameText,
                 String(linkText === undefined ? "true" : linkText) !== "false",
                 supportSourceText, ioTargetText,
-                String(traceText === undefined ? "true" : traceText) !== "false", "main"
+                String(traceText === undefined ? "true" : traceText) !== "false", "main", documentBase
               ).then(function(pid) {
                 return "statechart_spawn_ok(" + JSON.stringify(String(pid)) + ")";
               }, function(error) {
@@ -684,7 +694,7 @@
               return self.spawnSwiWasmRemoteActor(nodeText, goalText, sourceText, "main");
             };
             window.swiWasmLoadUriSource = function(uriText) {
-              return self.loadSwiWasmUriSource(uriText);
+              return self.loadSwiWasmUriSource(window.swiStatechartDocumentBase ? new URL(self.swiWasmRemoteNodeUrl(uriText),window.swiStatechartDocumentBase).href : uriText);
             };
             window.swiWasmRemoteToplevelSpawn = function(nodeText, sourceText, sessionText,
                                                          timeLimitText, idleLimitText) {
@@ -1166,7 +1176,7 @@
           },
           spawnSwiWasmStatechartActor: function(sourceKind, sourceText, parentPid,
                                                 nameText, linked, supportSourceText,
-                                                ioTargetText, traceEnabled, startupOwner) {
+                                                ioTargetText, traceEnabled, startupOwner, documentBase) {
             var self = this;
             var parent = String(parentPid || (this.isSwiWasm2Mode ? this.swiWasm2ShellPid : "main"));
             var parentEntry = this.swiWasmActorWorkers[parent];
@@ -1188,6 +1198,7 @@
                 "statechart_actor_loop", " ", candidate, String(nameText || ""), "statechart_actor",
                 {
                   statechartXml: xml,
+                  statechartDocumentBase: String(documentBase || ""),
                   statechartSupportSource: String(supportSourceText || ""),
                   statechartTrace: traceEnabled !== false,
                   ioTarget: inheritedIoTarget,
@@ -1234,6 +1245,8 @@
             if (message.once === true) {
               url.searchParams.set("once", "true");
             }
+            if (Number(message.httpTimeout) === 0) return Promise.resolve("error(error(rpc_error(http_timeout),rpc/3)).");
+            var timedOut = false;
             var controller = new AbortController();
             var owner = this.swiWasmActorWorkers && this.swiWasmActorWorkers[ownerPid];
             var ref = message.promise_ref ? String(message.promise_ref) : null;
@@ -1247,12 +1260,13 @@
               ? NaN
               : Number(message.httpTimeout);
             var timer = isFinite(httpTimeout) && httpTimeout >= 0
-              ? setTimeout(function() { controller.abort(); }, httpTimeout * 1000)
+              ? setTimeout(function() { timedOut = true; controller.abort(); }, httpTimeout * 1000)
               : null;
             resource.timer = timer;
             return Promise.resolve().then(function() {
               if (controller.signal.aborted) throw new Error("promise request disposed");
               return fetch(url.href, {
+              headers: Object.fromEntries(String(message.headerText || "").split("\n").filter(Boolean).map(function(line) { var i = line.indexOf(": "); return [line.slice(0, i), Array.from(new TextEncoder().encode(line.slice(i + 2)), function(c) { return String.fromCharCode(c); }).join("")]; })),
               credentials: "same-origin",
               signal: controller.signal
             }); }).then(function(response) {
@@ -1265,9 +1279,7 @@
                 return text;
               });
             }).catch(function(error) {
-              if (controller.signal.aborted && isFinite(httpTimeout) && httpTimeout >= 0) {
-                throw new Error("RPC transport timeout after " + httpTimeout + " seconds");
-              }
+              if (timedOut) return "error(error(rpc_error(http_timeout),rpc/3)).";
               throw error;
             }).finally(function() {
               if (timer !== null) clearTimeout(timer);
@@ -1924,7 +1936,7 @@
                   message.sourceKind, message.source, pid, message.name,
                   message.link !== false && String(message.link) !== "false",
                   message.supportSource, message.ioTarget,
-                  message.trace !== false && String(message.trace) !== "false"
+                  message.trace !== false && String(message.trace) !== "false", undefined, message.documentBase
                 );
                 break;
               case "remote_spawn":
@@ -1939,8 +1951,15 @@
               case "rpc":
                 result = this.requestSwiWasmWorkerRpc(message, pid);
                 break;
+              case "statechart_document":
+                var chartBase = message.documentBase || window.location.origin;
+                var chartUri = new URL(this.swiWasmRemoteNodeUrl(message.uri), chartBase).href;
+                result = this.loadSwiWasmAssetSource(chartUri).then(function(xml) {
+                  return "document(" + JSON.stringify(xml) + "," + JSON.stringify(chartUri) + ")";
+                });
+                break;
               case "src_uri":
-                result = this.loadSwiWasmUriSource(message.uri || "");
+                result = this.loadSwiWasmUriSource(message.documentBase ? new URL(this.swiWasmRemoteNodeUrl(message.uri),message.documentBase).href : message.uri || "");
                 break;
               case "toplevel_correlation":
                 result = this.ensureSwiWasmRemoteActorConnection(message.node).then(function(connection) { return connection.socket.protocol === "web-prolog-sync-v1"; });
@@ -2497,6 +2516,123 @@
             return [
               "% Browser-worker implementation of generic servers and supervisors.",
               ":- meta_predicate server_spawn(:, +, -), server_spawn(:, +, -, +), server_upgrade(+, :), server_upgrade(+, :, +), supervisor_spawn(:, -), supervisor_spawn(:, -, +), supervisor_spawn_child(+, :, -), wasm_startup_scope(0), browser_named_creation(+, -, +, -, 0).",
+              "browser_statechart_source(Options,Kind,Source) :-",
+              "    findall(O,(member(O,Options),(O=src_text(_);O=src_uri(_))),Sources),",
+              "    (Sources=[src_text(Text)] -> Kind=text,browser_source_text(Text,Source)",
+              "    ;Sources=[src_uri(URI)] -> Kind=uri,browser_uri_atom(URI,Source)",
+              "    ;Sources=[] -> throw(error(existence_error(option,src_uri_or_src_text),statechart_spawn/2))",
+              "    ;throw(error(domain_error(single_statechart_source_option,Sources),statechart_spawn/2))).",
+              "",
+              "% HTTP option schemas and first-field precedence. No I/O or goal execution.",
+              "% HTTP option schemas and first-field precedence. No I/O or goal execution.",
+              "% HTTP option schemas and first-field precedence. No I/O or goal execution.",
+              "rpc_http_validate(request_header(Header)) :-",
+              "    rpc_http_nonvar(Header),",
+              "    (compound(Header),functor(Header,'=',2) ->",
+              "       arg(1,Header,Name),arg(2,Header,Value),",
+              "       rpc_http_name(Name),rpc_http_value(Value)",
+              "    ; rpc_http_type_error(http_request_header,Header)).",
+              "rpc_http_validate(authorization(Auth)) :-",
+              "    rpc_http_nonvar(Auth),",
+              "    (compound(Auth),functor(Auth,basic,2) ->",
+              "       arg(1,Auth,User),arg(2,Auth,Password),rpc_http_value(User),rpc_http_value(Password)",
+              "    ; compound(Auth),functor(Auth,bearer,1) -> arg(1,Auth,Token),rpc_http_value(Token)",
+              "    ; rpc_http_domain_error(http_authorization,Auth)).",
+              "rpc_http_validate(user_agent(Value)) :- rpc_http_value(Value).",
+              "rpc_http_nonvar(Value) :-",
+              "    (var(Value)->throw(error(instantiation_error,rpc_transport));true).",
+              "rpc_http_type_error(Type,Value) :- throw(error(type_error(Type,Value),rpc_transport)).",
+              "rpc_http_domain_error(Domain,Value) :- throw(error(domain_error(Domain,Value),rpc_transport)).",
+              "rpc_http_text_chars(Value,Chars) :-",
+              "    rpc_http_nonvar(Value),",
+              "    (acyclic_term(Value)->true;throw(error(representation_error(cyclic_term),rpc_transport))),",
+              "    (Value==[]->Chars=[]",
+              "    ;atom(Value)->atom_chars(Value,Chars)",
+              "    ;rpc_http_string_chars(Value,Chars)->true",
+              "    ;rpc_http_char_list(Value,Value,Chars)).",
+              "rpc_http_char_list(List,Original,Chars) :-",
+              "    rpc_http_nonvar(List),",
+              "    (List==[]->Chars=[]",
+              "    ;List=[C|Rest]->rpc_http_nonvar(C),",
+              "       (rpc_http_one_char(C,Head)->append(Head,Tail,Chars),rpc_http_char_list(Rest,Original,Tail)",
+              "       ;rpc_http_type_error(atom_or_string,Original))",
+              "    ;rpc_http_type_error(atom_or_string,Original)).",
+              "rpc_http_text_atom(Value,Atom) :- rpc_http_text_chars(Value,Chars),atom_chars(Atom,Chars).",
+              "rpc_http_value(Value) :-",
+              "    rpc_http_text_chars(Value,Chars),",
+              "    (rpc_http_field_chars(Chars)->true;rpc_http_domain_error(http_header_value,Value)).",
+              "rpc_http_field_chars([]).",
+              "rpc_http_field_chars([C|Cs]) :-",
+              "    char_code(C,N),(N=:=9;N>=32,N=\\=127),N=<1114111,\\+ (N>=55296,N=<57343),",
+              "    rpc_http_field_chars(Cs).",
+              "rpc_http_name(Name) :-",
+              "    rpc_http_nonvar(Name),",
+              "    (atom(Name),Name\\==[]->true;rpc_http_type_error(atom,Name)),atom_codes(Name,Codes),",
+              "    (Codes\\==[],rpc_http_name_codes(Codes)->true;rpc_http_domain_error(http_header_name,Name)),",
+              "    rpc_http_lower(Name,Key),rpc_http_proxy_key(Key,Canonical),",
+              "    (member(Canonical,['x-forwarded-for','x-real-ip','x-web-prolog-user',",
+              "      'x-web-prolog-principal','x-authenticated-user','x-web-prolog-capabilities',",
+              "      'x-web-prolog-caps','x-web-prolog-internal-proxy','x-web-prolog-query-budget'])",
+              "    ->throw(error(permission_error(set,proxy_header,Name),rpc_transport));true).",
+              "rpc_http_name_codes([]).",
+              "rpc_http_name_codes([C|Cs]) :-",
+              "    (C>=65,C=<90;C>=97,C=<122;C>=48,C=<57;member(C,[33,35,36,37,38,39,42,43,45,46,94,95,96,124,126])),",
+              "    rpc_http_name_codes(Cs).",
+              "rpc_http_lower(Name,Lower) :- atom_codes(Name,Codes),rpc_http_lower_codes(Codes,Out),atom_codes(Lower,Out).",
+              "rpc_http_lower_codes([],[]).",
+              "rpc_http_lower_codes([C|Cs],[L|Ls]) :- (C>=65,C=<90->L is C+32;L=C),rpc_http_lower_codes(Cs,Ls).",
+              "rpc_http_proxy_key(Key,Canonical) :- atom_codes(Key,Cs),rpc_http_proxy_codes(Cs,Out),atom_codes(Canonical,Out).",
+              "rpc_http_proxy_codes([],[]).",
+              "rpc_http_proxy_codes([C|Cs],[D|Ds]) :- (C=:=95->D=45;D=C),rpc_http_proxy_codes(Cs,Ds).",
+              "rpc_http_fields(Options,Fields) :- rpc_http_fields_(Options,[],Fields).",
+              "rpc_http_fields_([],_,[]).",
+              "rpc_http_fields_([Option|Options],Seen,Fields) :-",
+              "    (rpc_http_field(Option,Key,Value)->",
+              "      (member(Key,Seen)->rpc_http_fields_(Options,Seen,Fields)",
+              "      ;Fields=[header(Key,Value)|Rest],rpc_http_fields_(Options,[Key|Seen],Rest))",
+              "    ;rpc_http_fields_(Options,Seen,Fields)).",
+              "rpc_http_field(request_header(Name=Value0),Key,Value) :-",
+              "    rpc_http_lower(Name,Key),rpc_http_text_atom(Value0,Value).",
+              "rpc_http_field(user_agent(Value0),'user-agent',Value) :- rpc_http_text_atom(Value0,Value).",
+              "rpc_http_field(authorization(bearer(Token)),authorization,Value) :-",
+              "    rpc_http_text_atom(Token,Text),atom_concat('Bearer ',Text,Value).",
+              "rpc_http_field(authorization(basic(User,Password)),authorization,Value) :-",
+              "    rpc_http_text_chars(User,Us),rpc_http_text_chars(Password,Ps),append(Us,[':'|Ps],Chars),",
+              "    rpc_http_host_utf8(Chars,Bytes),rpc_http_base64(Bytes,Codes),atom_codes(Encoded,Codes),",
+              "    atom_concat('Basic ',Encoded,Value).",
+              "rpc_http_native_options([],[]).",
+              "rpc_http_native_options([header('user-agent',Value)|Fields],[user_agent(Wire)|Rest]) :- !,",
+              "    rpc_http_native_value(Value,Wire),rpc_http_native_options(Fields,Rest).",
+              "rpc_http_native_options([header(Name,Value)|Fields],[request_header(Name=Wire)|Rest]) :-",
+              "    rpc_http_native_value(Value,Wire),rpc_http_native_options(Fields,Rest).",
+              "rpc_http_utf8([],[]).",
+              "rpc_http_utf8([C|Cs],Bytes) :-",
+              "    char_code(C,N),",
+              "    (N<128->Bytes=[N|Rest]",
+              "    ;N<2048->A is 192+N//64,B is 128+N mod 64,Bytes=[A,B|Rest]",
+              "    ;N<65536->A is 224+N//4096,B is 128+(N//64) mod 64,D is 128+N mod 64,Bytes=[A,B,D|Rest]",
+              "    ;A is 240+N//262144,B is 128+(N//4096) mod 64,D is 128+(N//64) mod 64,E is 128+N mod 64,Bytes=[A,B,D,E|Rest]),",
+              "    rpc_http_utf8(Cs,Rest).",
+              "rpc_http_base64([],[]).",
+              "rpc_http_base64([A],[X,Y,61,61]) :- !,I is A//4,J is (A mod 4)*16,rpc_http_b64(I,X),rpc_http_b64(J,Y).",
+              "rpc_http_base64([A,B],[X,Y,Z,61]) :- !,",
+              "    I is A//4,J is (A mod 4)*16+B//16,K is (B mod 16)*4,",
+              "    rpc_http_b64(I,X),rpc_http_b64(J,Y),rpc_http_b64(K,Z).",
+              "rpc_http_base64([A,B,C|Bytes],[X,Y,Z,W|Rest]) :-",
+              "    I is A//4,J is (A mod 4)*16+B//16,K is (B mod 16)*4+C//64,L is C mod 64,",
+              "    rpc_http_b64(I,X),rpc_http_b64(J,Y),rpc_http_b64(K,Z),rpc_http_b64(L,W),rpc_http_base64(Bytes,Rest).",
+              "rpc_http_b64(N,C) :-",
+              "    (N<26->C is 65+N;N<52->C is 97+N-26;N<62->C is 48+N-52;N=:=62->C=43;C=47).",
+              "rpc_http_wire_lines([], '').",
+              "rpc_http_wire_lines([header(Name,Value)|Fields],Text) :-",
+              "    atom_concat(Name,': ',Prefix),atom_concat(Prefix,Value,Line),atom_concat(Line,'\\n',Here),",
+              "    rpc_http_wire_lines(Fields,Rest),atom_concat(Here,Rest,Text).",
+              "",
+              "rpc_http_host_utf8(Chars,Bytes) :- rpc_http_utf8(Chars,Bytes).",
+              "rpc_http_string_chars(Value,Chars) :- string(Value),string_chars(Value,Chars).",
+              "rpc_http_native_value(Value,Value).",
+              "rpc_http_one_char(C,[C]) :- atom(C),atom_length(C,1).",
+              "",
               "browser_named_creation(Options, Pid, PI, Inner, Goal) :-",
               "    option(node(Node0), Options, localhost), browser_uri_atom(Node0, Node),",
               "    ( option(name(Name), Options)",
@@ -2788,7 +2924,7 @@
               "          Error, Outcome = failed(Error)),",
               "    ( Outcome == ready",
               "    -> send(Parent, '$supervisor_ready'(Self)), wasm_supervisor_loop(State)",
-              "    ; Outcome == failed_plain -> send(Parent, '$supervisor_failed'(Self, start_failed)), exit(start_failed)",
+              "    ; Outcome == failed_plain -> send(Parent, '$supervisor_failed'(Self, init_failed)), exit(init_failed)",
               "    ; Outcome = failed(Reason), send(Parent, '$supervisor_failed'(Self, Reason)),",
               "      exit(exception(Reason)) ).",
               "wasm_start_specs([], State, State).",
@@ -2896,8 +3032,8 @@
               "wasm_stop_children(sup(_,_,_,Children,_)) :-",
               "    reverse(Children, Reverse), wasm_stop_child_list(Reverse).",
               "",
-              "wasm_handle_supervisor_call(which_children, Children, State, State) :- State = sup(_,_,_,Children,_).",
-              "wasm_handle_supervisor_call(count_children, counts(Total,Active), State, State) :- State = sup(_,_,_,Children,_), length(Children, Total), include(wasm_child_running, Children, Running), length(Running, Active).",
+              "wasm_handle_supervisor_call(which_children, Infos, State, State) :- State = sup(_,_,_,Children,_), maplist(wasm_child_info,Children,Infos).",
+              "wasm_handle_supervisor_call(count_children, [specs-Total,active-Active,supervisors-Supervisors,workers-Workers], State, State) :- State = sup(_,_,_,Children,_), length(Children, Total), include(wasm_child_running, Children, Running), length(Running, Active), include(wasm_child_supervisor,Running,Sups), length(Sups,Supervisors), Workers is Active-Supervisors.",
               "wasm_handle_supervisor_call(start_child(Spec0), Reply, State0, State) :-",
               "    catch((browser_validate_child_spec(Spec0, Spec, supervisor_spawn_child/3), Valid=true), Error, Valid=error(Error)),",
               "    ( Valid = error(Invalid) -> Reply=error(Invalid), State=State0",
@@ -2926,10 +3062,12 @@
               "       -> catch((wasm_startup_scope(wasm_spawn_child_record(Spec, Child)) -> Outcome=ok ; Outcome=error(start_failed)),",
               "                Error, (wasm_startup_error(Error, Report), Outcome=error(Report))),",
               "          ( Outcome == ok",
-              "          -> append(Before, [Child|After], NewChildren), Reply=ok, State=sup(Str,Max,Period,NewChildren,R)",
+              "          -> Child=child(_,NewPid,_), append(Before, [Child|After], NewChildren), Reply=ok(NewPid), State=sup(Str,Max,Period,NewChildren,R)",
               "          ; Reply=Outcome, State=State0 )",
               "       ; Reply=error(running), State=State0 )",
               "    ; Reply=error(not_found), State=State0 ).",
+              "wasm_child_info(child(Id,Pid,child(_,Options)), info(Id,Pid,Type,Restart)) :- option(type(Type),Options,worker), option(restart(Restart),Options,permanent).",
+              "wasm_child_supervisor(child(_,_,child(_,Options))) :- option(type(Type),Options,worker), Type == supervisor.",
               "wasm_child_running(child(_,Pid,_)) :- Pid \\== undefined.",
               "",
               "wasm_supervisor_call(Sup, Request, Reply) :-",
@@ -2940,12 +3078,28 @@
               "                [timeout(10), on_timeout(throw(supervisor_call_timeout(Sup,Request)))]) ),",
               "      server_monitor_cleanup(MonRef)).",
               "supervisor_spawn_child(Sup, Spec0, Reply) :- browser_validate_child_spec(Spec0, Spec, supervisor_spawn_child/3), wasm_supervisor_call(Sup, start_child(Spec), Reply).",
-              "supervisor_terminate_child(Sup, Id, Reply) :- wasm_supervisor_call(Sup, terminate_child(Id), Reply).",
-              "supervisor_delete_child(Sup, Id, Reply) :- wasm_supervisor_call(Sup, delete_child(Id), Reply).",
-              "supervisor_respawn_child(Sup, Id, Reply) :- wasm_supervisor_call(Sup, restart_child(Id), Reply).",
+              "supervisor_terminate_child(Sup, Id, Reply) :- must_be(atom,Id), wasm_supervisor_call(Sup, terminate_child(Id), Reply).",
+              "supervisor_delete_child(Sup, Id, Reply) :- must_be(atom,Id), wasm_supervisor_call(Sup, delete_child(Id), Reply).",
+              "supervisor_respawn_child(Sup, Id, Reply) :- must_be(atom,Id), wasm_supervisor_call(Sup, restart_child(Id), Reply).",
               "supervisor_which_children(Sup, Children) :- wasm_supervisor_call(Sup, which_children, Children).",
               "supervisor_count_children(Sup, Counts) :- wasm_supervisor_call(Sup, count_children, Counts).",
-              "supervisor_halt(Sup) :- wasm_supervisor_call(Sup, stop, _).",
+              "supervisor_halt(Sup) :-",
+              "    self(Self), make_ref(Ref), make_ref(MonRef),",
+              "    setup_call_cleanup(true,",
+              "      ( install_monitor(Sup,MonRef), send(Sup,'$sup'(Self,Ref,stop)),",
+              "        get_time(Now), Deadline is Now+10, wasm_supervisor_halt_wait(Sup,Ref,MonRef,Deadline,pending) ),",
+              "      server_monitor_cleanup(MonRef)).",
+              "wasm_supervisor_halt_wait(Sup,Ref,MonRef,Deadline,Outcome) :-",
+              "    ( wasm_take_halt_reply(Ref) -> true",
+              "    ; get_time(Now), Remaining is max(0,Deadline-Now),",
+              "      receive({Ref-_ -> true ; down(_,MonRef,Reason) ->",
+              "        (wasm_take_halt_reply(Ref) -> true",
+              "        ; Reason == true -> wasm_supervisor_halt_wait(Sup,Ref,MonRef,Deadline,normal_down)",
+              "        ; throw(supervisor_down(Reason)))},",
+              "        [timeout(Remaining),on_timeout(wasm_supervisor_halt_timeout(Sup,Outcome))]) ).",
+              "wasm_take_halt_reply(Ref) :- receive({Ref-_ -> true},[timeout(0),on_timeout(fail)]).",
+              "wasm_supervisor_halt_timeout(_,normal_down) :- !,throw(supervisor_down(true)).",
+              "wasm_supervisor_halt_timeout(Sup,_) :- throw(supervisor_call_timeout(Sup,stop)).",
               "supervisor_stop(Sup) :- supervisor_halt(Sup)."
             ].join("\n");
           },
@@ -3076,7 +3230,7 @@
               "    -> arg(1, Option, Value), validate_rpc_client_value(Type, Value)",
               "    ; domain_error(spawn_option, Option) ).",
               "",
-              "browser_spawn_option_type(node, atom_or_string).",
+              "browser_spawn_option_type(node, atom).",
               "browser_spawn_option_type(link, spawn_boolean).",
               "browser_spawn_option_type(monitor, spawn_boolean).",
               "browser_spawn_option_type(name, atom).",
@@ -3085,7 +3239,7 @@
               "browser_spawn_option_type(src_text, atom_or_string).",
               "browser_spawn_option_type(src_list, list).",
               "browser_spawn_option_type(src_predicates, predicate_indicators).",
-              "browser_spawn_option_type(src_uri, atom_or_string).",
+              "browser_spawn_option_type(src_uri, atom).",
               "",
               "% Wrapper schemas extend recognition only at their own public entry points.",
               "validate_browser_wrapper_options(Kind, PI, Options) :-",
@@ -3107,7 +3261,7 @@
               "browser_wrapper_option_type(supervisor, intensity, nonneg).",
               "browser_wrapper_option_type(supervisor, period, supervisor_period).",
               "browser_wrapper_option_type(statechart, trace, spawn_boolean).",
-              "browser_wrapper_option_type(statechart, src_uri, atom_or_string).",
+              "browser_wrapper_option_type(statechart, src_uri, atom).",
               "",
               "validate_browser_wrapper_value(ptcp_limit(Kind), Value) :- !,",
               "    must_be(nonvar, Value), normalize_ptcp_limit(Kind, Value, _).",
@@ -3197,8 +3351,8 @@
               "    maplist(valid_first_solution_option, Options),",
               "    option(on_fail(OnFail), Options, continue),",
               "    option(on_error(OnError), Options, stop),",
-              "    must_be(oneof([stop, continue]), OnFail),",
-              "    must_be(oneof([stop, continue]), OnError),",
+              "    valid_first_solution_policy(OnFail),",
+              "    valid_first_solution_policy(OnError),",
               "    strip_module(QualifiedGoals, Module, Goals0),",
               "    must_be(list, Goals0),",
               "    maplist(qualify_actor_goal(Module), Goals0, Goals),",
@@ -3206,10 +3360,14 @@
               "        (maplist(first_solve(Scope, Solution), Goals, Pids),",
               "         wait_first(Scope, Pids, Solution, OnFail, OnError)))).",
               "",
-              "valid_first_solution_option(on_fail(_)) :- !.",
-              "valid_first_solution_option(on_error(_)) :- !.",
               "valid_first_solution_option(Option) :-",
-              "    throw(error(domain_error(first_solution_option, Option), first_solution/3)).",
+              "    must_be(nonvar,Option),",
+              "    ( compound(Option),compound_name_arity(Option,Name,1),memberchk(Name,[on_fail,on_error])",
+              "    -> arg(1,Option,Value),valid_first_solution_policy(Value)",
+              "    ; domain_error(first_solution_option,Option) ).",
+              "valid_first_solution_policy(Value) :-",
+              "    must_be(atom,Value),",
+              "    (memberchk(Value,[stop,continue]) -> true ; domain_error(first_solution_policy,Value)).",
               "",
               "first_solve(Scope, Solution, Goal, Pid) :-",
               "    self(Self),",
@@ -3363,6 +3521,9 @@
               "    RefText := swiWasmActorMakeRef(),",
               "    term_string(Ref, RefText).",
               "",
+              "validate_actor_target(Pid) :-",
+              "    must_be(nonvar,Pid),",
+              "    (Pid = _@Node -> browser_uri_atom(Node,_) ; true).",
               "canonical_pid(Pid@localhost, Pid@localhost) :- integer(Pid), !.",
               "canonical_pid(Pid, Pid@localhost) :- integer(Pid), !.",
               "canonical_pid(Pid, Pid).",
@@ -3399,6 +3560,7 @@
               "send(Pid, Message) :- send_worker_actor(Pid, Message).",
               "",
               "send(Pid, Message, Options) :-",
+              "    validate_actor_target(Pid),",
               "    option(delay(Delay), Options),",
               "    !,",
               "    must_be_transportable_term(Message),",
@@ -3423,6 +3585,7 @@
               "    Cancelled == true.",
               "",
               "send_worker_actor(Pid, Message) :-",
+              "    validate_actor_target(Pid),",
               "    must_be_transportable_term(Message),",
               "    term_string(Pid, PidText),",
               "    wire_text(Message, MessageText),",
@@ -3433,9 +3596,10 @@
               "    ;   throw(error(existence_error(actor, Pid), send/2))",
               "    ).",
               "",
-              "monitor(Pid, Ref) :- make_ref(Ref), install_monitor(Pid, Ref).",
+              "monitor(Pid, Ref) :- validate_actor_target(Pid), make_ref(Ref), install_monitor(Pid, Ref).",
               "",
               "install_monitor(Pid, Ref) :-",
+              "    validate_actor_target(Pid),",
               "    term_string(Pid, PidText),",
               "    term_string(Ref, RefText),",
               "    Promise := swiWasmActorMonitor(#PidText, #RefText),",
@@ -3461,6 +3625,7 @@
               "exit(Reason) :- exit(main, Reason).",
               "",
               "exit(Pid, Reason) :-",
+              "    validate_actor_target(Pid),",
               "    term_string(Pid, PidText),",
               "    term_string(Reason, ReasonText),",
               "    Promise := swiWasmActorExit(#PidText, #ReasonText),",
@@ -3633,7 +3798,7 @@
               "",
               "solution_limit(Options, Limit) :- ( option(limit(Limit), Options) -> must_be(positive_integer, Limit) ; Limit = none ).",
               "validate_solution_limit(Options) :- solution_limit(Options, _).",
-              "validate_once_options(Options) :- must_be(list, Options), forall((member(Option, Options), nonvar(Option), Option = once(Value)), must_be(boolean, Value)).",
+              "validate_once_options(Options) :- must_be(list, Options), forall((member(Option, Options), nonvar(Option), Option = once(Value)), validate_rpc_client_value(boolean, Value)).",
               "toplevel_call(Pid, Goal) :- toplevel_call(Pid, Goal, []).",
               "toplevel_call(Pid, Goal, Options) :- validate_once_options(Options), validate_solution_limit(Options),",
               "    term_string(Pid, PidText),",
@@ -3686,16 +3851,17 @@
               "    Aborted == true.",
               "",
               "statechart_spawn(Pid, Options) :-",
-              "    validate_browser_wrapper_options(statechart, statechart_spawn/2, Options),",
+              "    validate_browser_wrapper_options(statechart, statechart_spawn/2, Options), browser_statechart_source(Options,_,_),",
               "    browser_named_creation(Options, Pid, statechart_spawn/2, Inner, browser_statechart_spawn_options(Pid, Inner)).",
               "browser_statechart_spawn_options(Pid, Options) :-",
               "    statechart_spawn_source(Options, SourceKind, Source),",
-              "    validate_statechart_text_source(SourceKind, Source),",
+              "    statechart_document(SourceKind,Source,XML,Base), DocumentKind=text,",
+              "    validate_statechart_text_source(text, XML),",
               "    collect_statechart_support_source(Options, SupportSource),",
               "    option(trace(Trace), Options, true), term_string(Trace, TraceText),",
               "    option(node(Node0), Options, localhost), browser_uri_atom(Node0, Node),",
               "    (   Node \\== localhost",
-              "    ->  statechart_remote_goal(SourceKind, Source, Trace, Options, Goal),",
+              "    ->  statechart_document_goal(Base, XML, Trace, Options, Goal),",
               "        term_string(Goal, GoalText), term_string(Node, NodeText),",
               "        Promise := swiWasmActorRemoteSpawn(#NodeText, #GoalText, #SupportSource),",
               "        await(Promise, PidText), term_string(Pid, PidText),",
@@ -3705,13 +3871,13 @@
               "    ->  ( option(name(Name), Options) -> term_string(Name, NameText) ; NameText = \"\" ),",
               "        option(link(Link), Options, true), term_string(Link, LinkText),",
               "        ( option(io_target(IoTarget), Options) -> term_string(IoTarget, IoTargetText) ; IoTargetText = \"\" ),",
-              "        Promise := swiWasmStatechartSpawnWorker(#SourceKind, #Source, #SupportSource, #NameText, #LinkText, #IoTargetText, #TraceText),",
+              "        Promise := swiWasmStatechartSpawnWorker(#DocumentKind, #XML, #SupportSource, #NameText, #LinkText, #IoTargetText, #TraceText, #Base),",
               "        await(Promise, ResultText), statechart_spawn_worker_result(ResultText, Pid),",
               "        install_spawn_monitor(Pid, Options)",
-              "    ;   statechart_local_xml(SourceKind, Source, XML),",
+              "    ;   _ := swiWasmSetDocumentBase(#Base),",
               "        configure_statechart_io_target(Options),",
               "        statechart_wasm:set_trace_enabled(Trace),",
-              "        statechart_wasm:statechart_start(text(XML), SupportSource),",
+              "        catch(statechart_wasm:statechart_start(text(XML), SupportSource),Error,(_:=swiWasmSetDocumentBase(\"\"),throw(Error))),",
               "        Pid = statechart,",
               "        (statechart_wasm:statechart_running -> ChartLive = true ; ChartLive = false),",
               "        _ := swiWasmNamedChartStarted(#ChartLive),",
@@ -3750,14 +3916,16 @@
               "statechart_halt(Pid, _, _) :-",
               "    throw(error(existence_error(statechart, Pid), statechart_halt/3)).",
               "",
-              "statechart_spawn_source(Options, text, XML) :-",
-              "    member(src_text(XML0), Options), browser_source_text(XML0,XML),",
-              "    !.",
-              "statechart_spawn_source(Options, uri, URI) :-",
-              "    member(src_uri(URI0), Options), browser_uri_atom(URI0, URI),",
-              "    !.",
-              "statechart_spawn_source(_, _, _) :-",
-              "    throw(error(domain_error(statechart_source_option, src_text_or_src_uri), statechart_spawn/2)).",
+              "statechart_spawn_source(Options,Kind,Source) :- browser_statechart_source(Options,Kind,Source).",
+              "",
+              "statechart_document(text, XML, XML, '').",
+              "statechart_document(uri, URI, XML, Base) :-",
+              "    BaseText := swiResolveAssetUrl(#URI), atom_string(Base,BaseText),",
+              "    XML := swiRpcGet(#BaseText),",
+              "    (XML = null -> throw(error(existence_error(source_sink,URI),statechart_spawn/2));true).",
+              "statechart_document_goal('', XML, Trace, Options, Goal) :- !, statechart_remote_goal(text,XML,Trace,Options,Goal).",
+              "statechart_document_goal(Base, XML, Trace, Options, Goal) :-",
+              "    statechart_remote_goal_io(statechart_actor:interpret_document_trace(Trace,XML,Base),Options,Goal).",
               "",
               "statechart_local_xml(text, XML, XML).",
               "statechart_local_xml(uri, URI, XML) :-",
@@ -4096,33 +4264,30 @@
               "rpc_client_option_type(yield, timeout, number).",
               "rpc_client_option_type(yield, on_timeout, callable).",
               "",
-              "browser_uri_atom(Input, URI) :-",
-              "    must_be(nonvar, Input),",
-              "    ( atom(Input) -> URI = Input",
-              "    ; string(Input) -> atom_string(URI, Input)",
-              "    ; is_list(Input), maplist(browser_character,Input) -> atom_chars(URI,Input)",
-              "    ; type_error(atom_or_string, Input) ).",
-              "browser_rpc_uri(Input, URI) :-",
-              "    nonvar(Input), Input = Host0:Port, !,",
-              "    browser_uri_atom(Host0, Host), must_be(integer, Port),",
-              "    format(atom(URI), 'http://~w:~w', [Host,Port]).",
+              "browser_uri_atom(Input, URI) :- must_be(atom, Input), URI = Input.",
               "browser_rpc_uri(Input, URI) :- browser_uri_atom(Input, URI).",
               "",
               "rpc_query_option_type(limit, positive_integer).",
               "rpc_query_option_type(once, boolean).",
-              "rpc_query_option_type(timeout, query_timeout).",
-              "rpc_query_option_type(http_timeout, query_timeout).",
+              "rpc_query_option_type(timeout, number).",
+              "rpc_query_option_type(http_timeout, number).",
               "rpc_query_option_type(src_text, atom_or_string).",
-              "rpc_query_option_type(src_uri, atom_or_string).",
+              "rpc_query_option_type(src_uri, atom).",
               "rpc_query_option_type(src_list, list).",
               "rpc_query_option_type(src_predicates, predicate_indicators).",
+              "rpc_query_option_type(request_header,http_request_header).",
+              "rpc_query_option_type(authorization,http_authorization).",
+              "rpc_query_option_type(user_agent,http_field).",
               "",
-              "validate_rpc_client_value(spawn_boolean, Value) :- !, must_be(boolean, Value).",
+              "validate_rpc_client_value(spawn_boolean, Value) :- !, validate_rpc_client_value(boolean, Value).",
+              "validate_rpc_client_value(http_request_header,Value) :- !,rpc_http_validate(request_header(Value)).",
+              "validate_rpc_client_value(http_authorization,Value) :- !,rpc_http_validate(authorization(Value)).",
+              "validate_rpc_client_value(http_field,Value) :- !,rpc_http_validate(user_agent(Value)).",
               "validate_rpc_client_value(template, _) :- !.",
               "validate_rpc_client_value(query_timeout, Value) :- !,",
               "    must_be(nonvar, Value), normalize_optional_timeout(Value, _).",
               "validate_rpc_client_value(boolean, Value) :- !,",
-              "    must_be(nonvar, Value), normalize_boolean(Value, _).",
+              "    must_be(atom, Value), normalize_boolean(Value, _).",
               "validate_rpc_client_value(atom_or_string, Value) :- !,",
               "    must_be(nonvar, Value),",
               "    browser_native_text(Value,_).",
@@ -4148,11 +4313,12 @@
               "    collect_rpc_load(Opts, Parts),",
               "    Offset = 0,",
               "    rpc_transport_options(Opts, RemoteTimeout, Once, HTTPTimeout),",
-              "    web_rpc_page(Template, Offset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout).",
+              "    rpc_http_fields(Opts, HTTPFields),rpc_http_wire_lines(HTTPFields, HeaderText),",
+              "    web_rpc_page(Template, Offset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout, HeaderText).",
               "",
-              "web_rpc_page(Template, Offset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout) :-",
+              "web_rpc_page(Template, Offset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout, HeaderText) :-",
               "    web_rpc_call_url(BaseRPCURL, GoalAtom, TplAtom, Offset, Lim, Parts, RemoteTimeout, Once, FinalURL),",
-              "    Promise := swiRpcGetAsync(#FinalURL, #HTTPTimeout),",
+              "    Promise := swiRpcGetAsync(#FinalURL, #HTTPTimeout, #HeaderText),",
               "    await(Promise, Resp),",
               "    (Resp = null -> throw(rpc_error(fetch_failed)) ; true),",
               "    (   catch(wire_read(Resp, Response), _, fail)",
@@ -4163,7 +4329,7 @@
               "    ->  (   member(Bound, Slice), Template = Bound",
               "        ;   Once == false,",
               "            length(Slice, Count), NewOffset is Offset + Count,",
-              "            web_rpc_page(Template, NewOffset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout)",
+              "            web_rpc_page(Template, NewOffset, Lim, BaseRPCURL, GoalAtom, TplAtom, Parts, RemoteTimeout, Once, HTTPTimeout, HeaderText)",
               "        )",
               "    ;   Response = success(Slice, false)",
               "    ->  member(Bound, Slice), Template = Bound",
@@ -4197,8 +4363,9 @@
               "    (member(offset(Offset), Opts) -> true ; Offset = 0),",
               "    solution_limit(Opts, Lim),",
               "    rpc_transport_options(Opts, RemoteTimeout, Once, HTTPTimeout),",
+              "    rpc_http_fields(Opts, HTTPFields),rpc_http_wire_lines(HTTPFields, HeaderText),",
               "    web_rpc_url(URL, Goal, Template, Offset, Lim, Opts, RemoteTimeout, Once, FinalURL),",
-              "    RefText := swiPromiseStart(#FinalURL, #HTTPTimeout),",
+              "    RefText := swiPromiseStart(#FinalURL, #HTTPTimeout, #HeaderText),",
               "    atom_number(RefText, Ref).",
               "",
               "promise_cleanup(Ref) :-",
@@ -4272,33 +4439,33 @@
               "    BaseRPCURL := swiResolveRpcBase(#URL).",
               "",
               "web_parse_rpc_response(Resp, Message) :-",
-              "    (   catch(wire_read(Resp, Message), _, fail)",
-              "    ->  true",
+              "    (   catch(wire_read(Resp, Parsed), _, fail)",
+              "    ->  Message = Parsed",
               "    ;   throw(rpc_error(parse_failed))",
               "    ).",
               "",
               "collect_rpc_load(Opts, Parts) :-",
-              "    findall(Part, rpc_load_part(Opts, Part), Parts).",
+              "    findall(Part, (member(Option,Opts),rpc_load_part(Option,Part)), Parts).",
               "",
-              "rpc_load_part(Opts, Text) :-",
-              "    member(src_text(T), Opts),",
+              "rpc_load_part(Option, Text) :-",
+              "    Option = src_text(T),",
               "    browser_native_text(T,S),",
               "    Text := swiEnsureFinalFullStop(#S).",
               "",
-              "rpc_load_part(Opts, Text) :-",
-              "    member(src_list(Terms), Opts),",
+              "rpc_load_part(Option, Text) :-",
+              "    Option = src_list(Terms),",
               "    maplist([Term,A]>>(term_to_atom(Term,TA),atom_concat(TA,'.',A)), Terms, Atoms),",
               "    atomic_list_concat(Atoms,'\\n',Text).",
               "",
-              "rpc_load_part(Opts, Text) :-",
-              "    member(src_uri(URI0), Opts), browser_uri_atom(URI0, URI),",
+              "rpc_load_part(Option, Text) :-",
+              "    Option = src_uri(URI0), browser_uri_atom(URI0, URI),",
               "    term_string(URI, URIText),",
               "    ResolvedURI := swiResolveRpcLoadUri(#URIText),",
               "    Text := swiRpcGet(#ResolvedURI),",
               "    (Text = null -> throw(rpc_error(fetch_failed)) ; true).",
               "",
-              "rpc_load_part(Opts, Text) :-",
-              "    member(src_predicates(Inds), Opts),",
+              "rpc_load_part(Option, Text) :-",
+              "    Option = src_predicates(Inds),",
               "    findall(CT, (member(N/A, Inds), rpc_clause_text(N,A,CT)), CTs),",
               "    atomic_list_concat(CTs,'\\n',Text).",
               "",

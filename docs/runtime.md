@@ -58,9 +58,10 @@ Unicode atoms (`"hé😀"` is `[h,é,'😀']`; empty text is `[]`). This is a br
 reading-mode migration, not adoption of the experimental portable-text profile
 by every node. `write/1` prints these values as list terms.
 
-Bridge and library modules keep native string reading. Known text inputs (source,
-URI and prompt text) convert character lists explicitly at JS/native boundaries;
-numeric code lists are rejected. Existing URI origin, CORS and fetch restrictions
+Bridge and library modules keep native string reading. Known text inputs (source
+and prompt text) convert character lists explicitly at JS/native boundaries;
+numeric code lists are rejected. URI and node-address arguments require atoms;
+there is no `Host:Port` shorthand. Existing URI origin, CORS and fetch restrictions
 remain in force. The shared database is loaded explicitly into its own module,
 with bridge imports; it is not copied into user source.
 
@@ -92,9 +93,9 @@ buffering globally. Regression and UI evidence is in
 
 The creating engine asks the page coordinator to fetch supplemental Prolog URI
 source before child creation. Fetching retains the URI origin allowlist,
-`credentials: same-origin` and CORS restrictions. Worker collection groups
-text, lists, copied predicates and URI text; the main engine retains source-option
-order. Repeated URIs cause separate fetches. Failed fetches propagate before
+`credentials: same-origin` and CORS restrictions. Both Worker and main engines process
+text, lists, copied predicates and URI source in option-list order, for actor
+creation and RPC/promise source composition. Repeated URIs cause separate fetches. Failed fetches propagate before
 creation. Late completion cannot resume abandoned creation; cancelling an
 in-flight fetch is a separate concern.
 
@@ -147,8 +148,34 @@ monitor. Acknowledgement alone is not a termination barrier.
 Browser supervisor halt uses a tagged request and acknowledges after child
 shutdown. Its caller deadline remains independent of internal child shutdown
 deadlines. Legacy `'$sup_stop'(From)` messages keep their `reply(true)` response.
-The shared manual documents the different native halt acknowledgement timing
-and the scope of restart/rollback guarantees.
+All runtimes use this completion point. An available matching acknowledgement
+has precedence over a down notification, and normal down retains the original
+ten-second deadline. Observing supervisor termination requires a separate monitor.
+
+Child IDs are atoms across creation and management APIs. Inspection returns
+ordered `info(Id,Pid,Type,Restart)` records, including stopped children. Counts
+are `[specs-Specs,active-Active,supervisors-Supervisors,workers-Workers]`, with
+only active children included in the type counts. Successful respawn returns
+`ok(NewPid)`.
+
+Creation waits for initial child preparation and admission, without waiting for
+application goals to finish. Initial failure rolls back and raises
+`error(supervisor_start_failed(Pid,Reason),supervisor_spawn/3)`, with `init_failed`
+for ordinary failure or the original exception.
+
+## RPC deadlines
+
+`timeout/1` requests destination execution time; `http_timeout/1` bounds each
+complete caller HTTP request. Both accept numbers, normalize negatives to zero,
+use their first occurrence, and validate every occurrence before source work.
+Omission retains the corresponding default. Each later RPC page gets a fresh
+HTTP deadline. Source preparation uses its own access policy and deadline.
+
+HTTP expiry raises `error(rpc_error(http_timeout),_)` for RPC. Promises deliver
+`error(error(rpc_error(http_timeout),_))` through yield. A zero HTTP deadline
+starts no fetch. Remote execution errors retain their original terms. Explicit
+Abort remains distinct from transport expiry, and a completed HTTP response is
+not timed out during subsequent UI scheduling.
 
 ## Promises
 
@@ -169,9 +196,12 @@ completion cannot reinsert it. Destroying an engine destroys its entire store.
 The compatibility main engine hosts its first chart directly, using the fixed
 `statechart` pid, and sends subsequent local charts to Workers. Its dispatch
 branches keep local, nested and remote entry points separate so nested creation
-does not overwrite the active interpreter configuration. XML is fetched by the
-engine/node running the chart; supplemental Prolog follows the source-loading
-path above.
+does not overwrite the active interpreter configuration. Initial URI XML is fetched by the creating engine before local Worker creation
+or remote dispatch. Text and the absolute document URI travel together; the
+running chart uses that base for later relative document and Prolog-source
+references. Later fetches follow the execution environment's access policy.
+Exactly one XML source is required, with missing or multiple sources rejected
+before fetching. Supplemental Prolog follows the source-loading path above.
 
 Worker-backed statecharts expose the same `Id@localhost` pid form as ordinary
 actors. Their spawn monitors retain that complete pid as the reference. The
@@ -218,3 +248,13 @@ and conformance questions, rather than conclusions implied by those repairs.
 
 The shared SXML schema is supplied by the pinned native dependency during
 `tools/setup_swi.py`; run browser tests through `tools/test.sh WASM` after setup.
+
+### Common RPC HTTP fields
+
+HTTP fields use `request_header(Name=Value)`, `authorization(basic(User,Password))`,
+`authorization(bearer(Token))`, and `user_agent(Agent)`. Names are ASCII HTTP tokens;
+values and credential arguments accept atoms, strings and character-list strings.
+Every occurrence is validated before source work; the first field with a given
+case-insensitive name wins across all option forms. Field values use UTF-8 bytes. Basic credentials use UTF-8
+then Base64. RPC fields apply to every page and never to source downloads.
+Reserved proxy identity fields are rejected. Caller access policy still applies.
