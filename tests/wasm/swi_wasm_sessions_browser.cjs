@@ -105,5 +105,6 @@ const {chromium} = require('playwright');
       assert.deepEqual(errors,[]);console.log(mode+': '+checks.length+' session checks passed');
       await page.close();
     }
+    await require("./swi_wasm_promise_browser.cjs")(browser,process.env.RUNTIME_URL || "http://localhost:8096/");
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1});

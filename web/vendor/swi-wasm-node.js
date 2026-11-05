@@ -467,7 +467,7 @@
               return new URL(String(uri || ""), window.swiStatechartDocumentBase || window.location.origin).href;
             };
             this.installSwiWasmActorBridge();
-            window._swiPromiseStore = createSwiWasmPromiseStore({
+            window._swiPromiseStore = self.getSwiWasmPromiseContext ? self.getSwiWasmPromiseContext() : createSwiWasmPromiseStore({
               mint: function() { return self.makeBrowserPromiseRef(window._swiPromiseStore.items); },
               errorText: function() { return "error(rpc_error(fetch_failed))."; }
             });
@@ -493,11 +493,11 @@
               });
             };
             window.swiPromiseWait = function(ref, token, timeout) { return window._swiPromiseStore.wait(String(ref),String(token),Number(timeout)); };
-            window.swiPromiseClaim = function(ref) { return window._swiPromiseStore.claim(String(ref)); };
+            window.swiPromiseClaim = function(ref) { return window._swiPromiseStore.claim(String(ref), "main"); };
             window.swiPromiseCommit = function(ref, token) { return window._swiPromiseStore.commit(String(ref),String(token)); };
             window.swiPromiseRelease = function(ref, token) { return window._swiPromiseStore.release(String(ref),String(token)); };
             window.swiPromiseCleanup = function(ref) { return window._swiPromiseStore.dispose(String(ref)); };
-            window.swiAbortPromiseWaits = function() { return window._swiPromiseStore.interruptCollectors(); };
+            window.swiAbortPromiseWaits = function() { return window._swiPromiseStore.interruptCollectors("main"); };
             return this.loadSwiWasmEngineBundle().then(function() {
               self.swiWasmOutputBuffer = "";
               return SWIPL({
@@ -1099,6 +1099,7 @@
               // that the Logger displays.
               worker.postMessage({
                 command: "configure",
+                contextPromises: true,
                 assets: this.swiWasmAssets,
                 goal: entry.goal,
                 behaviourSource: this.swiWasmBehaviourProlog(),
@@ -1109,6 +1110,7 @@
             } else {
               worker.postMessage(Object.assign({
                 command: "start",
+                contextPromises: true,
                 assets: this.swiWasmAssets,
                 pid: pid,
                 goal: entry.goal,
@@ -1208,7 +1210,40 @@
               );
             });
           },
+          // Each runtime instance represents one browser client context. Only
+          // its coordinator selects this registry; Worker query data never does.
+          getSwiWasmPromiseContext: function() {
+            if (!this.swiWasmPromiseContext) {
+              var self = this;
+              this.swiWasmPromiseContext = createSwiWasmPromiseStore({
+                mint: function() { return self.makeBrowserPromiseRef(); },
+                errorText: function(error) { return "error(rpc_error(" + JSON.stringify(String(error && error.message || error)) + "))."; }
+              });
+              if (this.swiWasmPromiseContextClosed) this.swiWasmPromiseContext.close();
+            }
+            return this.swiWasmPromiseContext;
+          },
+          createSwiWasmContextPromise: function(message) {
+            var self = this;
+            return this.getSwiWasmPromiseContext().create(function() {
+              var resource = {};
+              return {promise:self.requestSwiWasmWorkerRpc(message, undefined, resource),
+                cancel:function() {
+                  if (resource.timer !== null && resource.timer !== undefined) clearTimeout(resource.timer);
+                  if (resource.controller) resource.controller.abort();
+                }};
+            });
+          },
+          releaseSwiWasmPromiseCollectors: function(pid) {
+            if (this.swiWasmPromiseContext) this.swiWasmPromiseContext.interruptCollectors(String(pid));
+          },
+          closeSwiWasmPromiseContext: function() {
+            this.swiWasmPromiseContextClosed = true;
+            if (this.swiWasmPromiseContext) this.swiWasmPromiseContext.close();
+            // Keep the registry and reference history until this runtime dies.
+          },
           disposeSwiWasmPromiseRequest: function(pid, ref) {
+            this.releaseSwiWasmPromiseCollectors(pid);
             var entry = this.swiWasmActorWorkers[pid];
             var requests = entry && entry.promiseRequests;
             if (!requests) return;
@@ -1221,7 +1256,7 @@
               resource.controller.abort();
             });
           },
-          requestSwiWasmWorkerRpc: function(message, ownerPid) {
+          requestSwiWasmWorkerRpc: function(message, ownerPid, contextResource) {
             var node = resolveBrowserRpcBaseUri(message.node || "");
             var url = new URL(node, window.location.origin);
             var path = url.pathname.replace(/\/$/, "");
@@ -1251,7 +1286,8 @@
             var owner = this.swiWasmActorWorkers && this.swiWasmActorWorkers[ownerPid];
             var ref = message.promise_ref ? String(message.promise_ref) : null;
             if (ref && owner && owner.done) return Promise.reject(new Error("promise Worker has stopped"));
-            var resource = {controller:controller, timer:null};
+            var resource = contextResource || {};
+            resource.controller = controller; resource.timer = null;
             if (ref && owner) {
               owner.promiseRequests = owner.promiseRequests || Object.create(null);
               owner.promiseRequests[ref] = resource;
@@ -1772,6 +1808,23 @@
               this.sendSwiWasmActorMessageDelayed(message.to, message.message, message.delay, message.id);
               return;
             }
+            if (message.type === "promise_claim") {
+              if (!entry.done) this.getSwiWasmPromiseContext().claim(String(message.ref), String(pid), String(message.token));
+              return;
+            }
+            if (message.type === "promise_cleanup") {
+              if (!entry.done) this.getSwiWasmPromiseContext().dispose(String(message.ref));
+              return;
+            }
+            if (message.type === "promise_release") {
+              var store = this.getSwiWasmPromiseContext(), record = store.items[String(message.ref)];
+              if (record && record.collector && record.collector.owner === String(pid)) store.release(String(message.ref), String(message.token));
+              return;
+            }
+            if (message.type === "promise_interrupt") {
+              this.releaseSwiWasmPromiseCollectors(pid);
+              return;
+            }
             if (message.type === "promise_dispose") {
               this.disposeSwiWasmPromiseRequest(pid, message.ref);
               return;
@@ -1863,6 +1916,7 @@
               return;
             }
             if (message.type === "error") {
+              this.releaseSwiWasmPromiseCollectors(pid);
               if (!entry.done) {
                 entry.done = true;
                 entry.reason = "error(" + JSON.stringify(String(message.error || "unknown_error")) + ")";
@@ -1891,6 +1945,7 @@
           },
           handleSwiWasmActorRequest: function(pid, message) {
             var entry = this.swiWasmActorWorkers[pid];
+            if (!entry || entry.done) return;
             var result = null;
             var ok = true;
             var error = "";
@@ -1947,6 +2002,17 @@
                   message.node || "", message.source || "", message.session || "false", pid,
                   message.timeLimit || "infinite", message.idleLimit || "infinite", pid
                 );
+                break;
+              case "promise_create":
+                result = this.createSwiWasmContextPromise(message);
+                break;
+              case "promise_wait":
+              case "promise_commit":
+                var store = this.getSwiWasmPromiseContext(), record = store.items[String(message.ref)];
+                result = !record ? "missing_promise" : !record.collector || record.collector.owner !== String(pid) || record.collector.token !== String(message.token)
+                  ? "busy_promise" : message.action === "promise_wait"
+                    ? store.wait(String(message.ref), String(message.token), Number(message.timeout))
+                    : store.commit(String(message.ref), String(message.token));
                 break;
               case "rpc":
                 result = this.requestSwiWasmWorkerRpc(message, pid);
@@ -2457,6 +2523,7 @@
             return waiters.length;
           },
           resetSwiWasmActorWorkers: function() {
+            this.closeSwiWasmPromiseContext();
             Object.keys(this.swiWasmActorWorkers || {}).forEach(function(pid) {
               var entry = this.swiWasmActorWorkers[pid];
               this.disposeSwiWasmPromiseRequest(pid);
@@ -2643,7 +2710,7 @@
               "           Reservation := swiWasmNameReserve(#Token, #NameText),",
               "           browser_name_await(Reservation, Status),",
               "           (Status == \"reserved\" -> true ; throw(error(permission_error(register,actor_name,Name),PI))),",
-              "           (Node == localhost, PI == statechart_spawn/2, runtime_property(implementation(swi_wasm_main)),",
+              "           (Node == localhost, PI == statechart_spawn/2, browser_engine_mode(main),",
               "            \\+ statechart_wasm:statechart_running -> nb_setarg(2, Guard, statechart) ; true),",
               "           once(call(Goal)),",
               "           term_string(Pid, PidText),",
@@ -2662,7 +2729,7 @@
               "    ; string(Status), memberchk(Status, [\"connection_closed\",\"terminated\"]) -> atom_string(Reason,Status), throw(error(remote_spawn_failed(Reason),PI))",
               "    ; throw(error(permission_error(register,actor_name,Name),PI)) ).",
               "browser_name_await(Promise, Value) :-",
-              "    ( runtime_property(implementation(swi_wasm_worker))",
+              "    ( browser_engine_mode(worker)",
               "    -> swi_wasm_actor_bridge:actor_await(Promise, Value)",
               "    ; await(Promise, Value) ).",
               "server_spawn(Pred, State, Pid) :- server_spawn(Pred, State, Pid, []).",
@@ -3154,11 +3221,11 @@
               ":- multifile user:message_hook/3.",
               "",
               "self(main@localhost).",
-              "runtime_property(implementation(swi_wasm_main)).",
+              "browser_engine_mode(main).",
               "runtime_property(persistent(false)).",
               "runtime_property(inbound_addressable(false)).",
               "runtime_property(dom(true)).",
-              "runtime_property(actor_isolation(cooperative_engine)).",
+              "runtime_property(actor_isolation(cooperative)).",
               "runtime_property(hard_termination(false)).",
               "",
               ":- dynamic behaviour_source_load/1, behaviour_source_block/1.",

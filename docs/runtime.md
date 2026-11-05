@@ -179,17 +179,30 @@ not timed out during subsequent UI scheduling.
 
 ## Promises
 
-Each engine owns a local promise store. The main store persists across shell
-queries; spawned Workers never inherit it. A numeric reference is meaningful
-only in that engine and can coincide with a number in another store. Isolation
-is not a security boundary against trusted JavaScript with access to the page.
+A browser runtime instance is one client context. Its coordinator owns a single
+promise registry shared by its main engine, shell Workers and spawned actors.
+The coordinator binds Worker messages to that instance and actor identity;
+query code cannot select another context. Separate runtime instances retain
+separate stores, including when their numeric references coincide. Direct
+Workers started without a coordinator form their own isolated context.
+Isolation is not a security boundary against trusted JavaScript with page access.
+
+Requests run under the context rather than the creating engine. Actor exit and
+shell replacement preserve promises in a retained context. Actor interruption
+or exit releases only that actor's collector claims. Context disposal retires
+all entries, wakes collectors and aborts local transport resources. It does not
+guarantee cancellation at the remote node. Issued reference history lasts for
+the runtime instance, preventing consumed or expired references from reviving.
 
 Expiry is checked on access and by a timer, so browser timer throttling does not
 extend the five-minute validity period. Collector claims are released before
-running timeout callbacks. Collection commits when Prolog resumes after the
-wait; output mismatch then consumes the selected result. Disposing or expiring
-a reference retires its timers, waiters and local transport resources. Late
-completion cannot reinsert it. Destroying an engine destroys its entire store.
+running timeout callbacks. Collection commits before output matching; mismatch
+consumes the selected answer. Disposal or expiry winning first produces a
+missing-reference error; late completion cannot reinsert an entry.
+Worker claims, releases and disposal use the ordered coordinator channel without
+suspending Prolog setup or cleanup handlers. Creation, waiting and commit await
+coordinator replies. Claim tokens are checked against the sending actor, so late
+cleanup cannot release a replacement collector or another actor's claim.
 
 ## Statecharts and transport
 
@@ -258,3 +271,12 @@ Every occurrence is validated before source work; the first field with a given
 case-insensitive name wins across all option forms. Field values use UTF-8 bytes. Basic credentials use UTF-8
 then Base64. RPC fields apply to every page and never to source downloads.
 Reserved proxy identity fields are rejected. Caller access policy still applies.
+
+## Runtime capabilities
+
+`runtime_property/1` enumerates only the five language-defined properties.
+Worker actors report `actor_isolation(independent)` and the main engine reports
+`actor_isolation(cooperative)`. The other values retain their environment
+meanings. Unknown properties, including implementation identity, fail normally.
+Private engine-mode dispatch preserves naming and statechart startup behavior;
+diagnostic tools and package provenance identify the implementation.

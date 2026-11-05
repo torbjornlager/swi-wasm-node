@@ -38,7 +38,7 @@ exercise a prefixed deployment. No Prolog server is required for browser executi
 
 ## Host API
 
-Load `web/swi_wasm_actor_worker.js` for the compatibility promise store, then
+Load `web/swi_wasm_actor_worker.js` for the shared client-context promise registry, then
 `web/vendor/swi-wasm-node.js`. The latter exports `SwiWasmNode` (also CommonJS).
 
 ```javascript

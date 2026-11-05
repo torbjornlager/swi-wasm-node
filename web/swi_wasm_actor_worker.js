@@ -2,7 +2,7 @@
 // for the lifecycle store; only a Worker runs the actor bootstrap below.
 function createSwiWasmPromiseStore(options) {
   "use strict";
-  var items = Object.create(null), nextCollector = 1;
+  var items = Object.create(null), nextCollector = 1, closed = false;
   var now = options.now || Date.now;
   var schedule = options.setTimer || setTimeout;
   var unschedule = options.clearTimer || clearTimeout;
@@ -35,6 +35,7 @@ function createSwiWasmPromiseStore(options) {
     return entry;
   }
   function create(start) {
+    if (closed) throw new Error("promise context closed");
     var ref = String(options.mint());
     var entry = {deadline:now()+lifetime, timer:null, ready:false, result:null, collector:null, cancel:null};
     items[ref] = entry;
@@ -63,12 +64,12 @@ function createSwiWasmPromiseStore(options) {
     }
     return ref;
   }
-  function claim(ref) {
+  function claim(ref, owner, requestedToken) {
     var entry = get(ref);
     if (!entry) return "missing_promise";
     if (entry.collector) return "busy_promise";
-    var token = "promise_collector("+(nextCollector++)+")";
-    entry.collector = {token:token, waiter:null};
+    var token = requestedToken || "promise_collector("+(nextCollector++)+")";
+    entry.collector = {token:token, owner:owner, waiter:null};
     return token;
   }
   function wait(ref, token, timeout) {
@@ -100,16 +101,20 @@ function createSwiWasmPromiseStore(options) {
     dispose(String(ref));
     return "committed";
   }
-  function interruptCollectors() {
+  function interruptCollectors(owner) {
     var count = 0;
     Object.keys(items).forEach(function(ref) {
       var entry = items[ref];
-      if (entry.collector) { count++; release(ref, entry.collector.token); }
+      if (entry.collector && (owner === undefined || entry.collector.owner === owner)) { count++; release(ref, entry.collector.token); }
     });
     return count;
   }
+  function close() {
+    closed = true;
+    Object.keys(items).forEach(dispose);
+  }
   return {items:items, create:create, claim:claim, wait:wait, commit:commit, release:release,
-    dispose:dispose, interruptCollectors:interruptCollectors};
+    dispose:dispose, interruptCollectors:interruptCollectors, close:close};
 }
 
 (function() {
@@ -392,7 +397,7 @@ function createSwiWasmPromiseStore(options) {
       // User input is intentionally open-ended.  The coordinator presents a
       // non-blocking dialog, so a person taking more than 30 seconds must not
       // turn input/2 into a spurious request failure.
-      var timer = action === "input" ? null : setTimeout(function() {
+      var timer = action === "input" || action === "promise_wait" ? null : setTimeout(function() {
         if (pendingRequests[id]) {
           delete pendingRequests[id];
           reject(new Error("actor request timed out: " + action));
@@ -542,6 +547,12 @@ function createSwiWasmPromiseStore(options) {
 
   function actorPromiseStart(nodeText, goalText, templateText, offset, limit,
                              loadText, remoteTimeout, once, httpTimeout, headerText) {
+    if (workerConfiguration.contextPromises) return actorRequest("promise_create", {
+      node:String(nodeText), goal:String(goalText), template:String(templateText), offset:Number(offset),
+      limit:String(limit) === "none" ? undefined : Number(limit), loadText:String(loadText),
+      remoteTimeout:Number(remoteTimeout), once:once === true || String(once) === "true",
+      httpTimeout:Number(httpTimeout), headerText:String(headerText || "")
+    });
     return pendingRpcPromises.create(function(ref) {
       return {promise: actorRpc(nodeText, goalText, templateText, offset, limit,
         loadText, remoteTimeout, once, httpTimeout, ref, headerText),
@@ -598,6 +609,7 @@ function createSwiWasmPromiseStore(options) {
   }
 
   function actorPromiseWait(ref, token, timeout) {
+    if (workerConfiguration.contextPromises) return actorRequest("promise_wait", {ref:String(ref),token:String(token),timeout:Number(timeout)});
     return pendingRpcPromises.wait(String(ref), String(token), Number(timeout));
   }
 
@@ -711,6 +723,7 @@ function createSwiWasmPromiseStore(options) {
   }
 
   function interruptGoal() {
+    if (workerConfiguration.contextPromises) post("promise_interrupt", {});
     if (activeAwait) {
       var waiting = activeAwait;
       activeAwait = null;
@@ -1077,10 +1090,24 @@ function createSwiWasmPromiseStore(options) {
   self.actorLoadUri = actorLoadUri;
   self.actorLoadStatechartDocument = actorLoadStatechartDocument;
   self.actorPromiseWait = actorPromiseWait;
-  self.actorPromiseClaim = function(ref) { return pendingRpcPromises.claim(String(ref)); };
-  self.actorPromiseCommit = function(ref, token) { return pendingRpcPromises.commit(String(ref),String(token)); };
-  self.actorPromiseRelease = function(ref, token) { return pendingRpcPromises.release(String(ref),String(token)); };
-  self.actorPromiseCleanup = function(ref) { return pendingRpcPromises.dispose(String(ref)); };
+  var nextContextCollector = 1;
+  self.actorPromiseClaim = function(ref) {
+    if (!workerConfiguration.contextPromises) return pendingRpcPromises.claim(String(ref));
+    // setup/cleanup cannot suspend. Reserve locally and send before wait on the
+    // ordered Worker channel; the coordinator reports missing/busy via wait.
+    var token = selfPidText + ":collector:" + (nextContextCollector++);
+    post("promise_claim", {ref:String(ref), token:token});
+    return token;
+  };
+  self.actorPromiseCommit = function(ref, token) { return workerConfiguration.contextPromises ? actorRequest("promise_commit", {ref:String(ref),token:String(token)}) : pendingRpcPromises.commit(String(ref),String(token)); };
+  self.actorPromiseRelease = function(ref, token) {
+    if (workerConfiguration.contextPromises) { post("promise_release", {ref:String(ref),token:String(token)}); return true; }
+    return pendingRpcPromises.release(String(ref),String(token));
+  };
+  self.actorPromiseCleanup = function(ref) {
+    if (workerConfiguration.contextPromises) { post("promise_cleanup", {ref:String(ref)}); return true; }
+    return pendingRpcPromises.dispose(String(ref));
+  };
   self.actorStatechartSpawn = actorStatechartSpawn;
   self.actorActors = actorActors;
   self.actorRegister = actorRegister;
@@ -1217,11 +1244,11 @@ function createSwiWasmPromiseStore(options) {
       workerRole === "shell_toplevel" ? "shell_toplevel_role." : "shell_toplevel_role :- fail.",
       "",
       "self(" + qualifyLocalPid(selfPidText) + ").",
-      "runtime_property(implementation(swi_wasm_worker)).",
+      "browser_engine_mode(worker).",
       "runtime_property(persistent(false)).",
       "runtime_property(inbound_addressable(false)).",
       "runtime_property(dom(false)).",
-      "runtime_property(actor_isolation(web_worker)).",
+      "runtime_property(actor_isolation(independent)).",
       "runtime_property(hard_termination(true)).",
       "",
       "spawn(Goal) :- spawn(Goal, _).",
@@ -1702,8 +1729,8 @@ function createSwiWasmPromiseStore(options) {
       "    rpc_transport_options(Options, RemoteTimeout, Once, HTTPTimeout),",
       "    rpc_http_fields(Options, HTTPFields),rpc_http_wire_lines(HTTPFields, HeaderText),",
       "    collect_rpc_load_text(Options, LoadText),",
-      "    RefText := actorPromiseStart(#NodeText, #GoalText, #TemplateText, #Offset, #Limit, #LoadText, #RemoteTimeout, #Once, #HTTPTimeout, #HeaderText),",
-      "    atom_number(RefText, Ref).",
+      "    RefPromise := actorPromiseStart(#NodeText, #GoalText, #TemplateText, #Offset, #Limit, #LoadText, #RemoteTimeout, #Once, #HTTPTimeout, #HeaderText),",
+      "    actor_await(RefPromise, RefText), atom_number(RefText, Ref).",
       "",
       "promise_cleanup(Ref) :-",
       "    must_be(integer, Ref), number_string(Ref, RefText), _ := actorPromiseCleanup(#RefText).",
@@ -1723,9 +1750,10 @@ function createSwiWasmPromiseStore(options) {
       "        ; true ) ),",
       "      ( Promise := actorPromiseWait(#RefText, #Claim, #Timeout),",
       "        actor_await(Promise, ResponseText),",
+      "        ( ResponseText == \"busy_promise\" -> throw(error(permission_error(collect,promise,Ref), context(yield/3, 'promise already has a collector'))) ; true ),",
       "        ( ResponseText == null -> true ; ResponseText == \"missing_promise\" -> true",
-      "        ; Status := actorPromiseCommit(#RefText, #Claim),",
-      "          ( Status == committed -> true",
+      "        ; CommitPromise := actorPromiseCommit(#RefText, #Claim), actor_await(CommitPromise, Status),",
+      "          ( (Status == committed ; Status == \"committed\") -> true",
       "          ; throw(error(existence_error(promise, Ref), context(yield/3, 'promise disposed before collection'))) ) ) ),",
       "      (_ := actorPromiseRelease(#RefText, #Claim))),",
       "    (   ResponseText == \"missing_promise\"",
@@ -2660,6 +2688,7 @@ function createSwiWasmPromiseStore(options) {
   }
 
   function start(message) {
+    if (message.contextPromises !== undefined) workerConfiguration.contextPromises = message.contextPromises === true;
     if (message.assets) workerConfiguration.assets = message.assets;
     workerConfiguration.documentBase = String(message.statechartDocumentBase || "");
     if (started) {

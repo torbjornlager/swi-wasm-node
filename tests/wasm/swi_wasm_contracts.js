@@ -82,7 +82,7 @@ async function until(pred, ms) {
 
 async function startToplevel(W, lifecycle, source = behaviourSource, role = "actor") {
   W.S.onmessage({ data: {
-    command: "start", pid: PID, behaviourSource: source, role: role,
+    command: "start", contextPromises:!!W.contextPromises, pid: PID, behaviourSource: source, role: role,
     goal: "swi_wasm_actor_bridge:ptcp(" + QPID + ", " + CLIENT + "@localhost, " + (lifecycle || "true") + ")"
   } });
   if (!await until(function() { return W.posted.some(function(m) { return m.type === "started"; }); }, 20000)) {
@@ -176,6 +176,7 @@ function scopedWorkerCoordinator(W, owner = PID) {
   if (!global.window.location) global.window.location={origin:"https://example.org"};
   const threads=new Set();
   const host=serverMonitorCoordinator(text=>deliver(W,text));
+  W.contextPromises=true;
   host.options={}; host.created=[]; host.killed=[]; host.calls=0;
   global.qualifySwiWasmLocalPid = text => /^\d+$/.test(String(text)) ? text+"@localhost" : String(text);
   global.sanitizeDownReasonTerm = text => String(text);
@@ -210,7 +211,9 @@ function scopedWorkerCoordinator(W, owner = PID) {
     releaseSwiWasmScopedWorker:"closeSwiWasmWorkerScopes",closeSwiWasmWorkerScopes:"closeSwiWasmWorkerScope",closeSwiWasmWorkerScope:"spawnSwiWasmWorkerActor",
     spawnSwiWasmWorkerActor:"spawnSwiWasmWorkerActorReady",spawnSwiWasmWorkerActorReady:"swiWasmRemoteNodeUrl",swiWasmRemoteNodeUrl:"loadSwiWasmUriSource",
     spawnSwiWasmStatechartActor:"disposeSwiWasmPromiseRequest",whereisSwiWasmActorName:"swiWasmActorPidLive",
-    disposeSwiWasmPromiseRequest:"requestSwiWasmWorkerRpc",
+    getSwiWasmPromiseContext:"createSwiWasmContextPromise", createSwiWasmContextPromise:"releaseSwiWasmPromiseCollectors",
+    releaseSwiWasmPromiseCollectors:"closeSwiWasmPromiseContext",closeSwiWasmPromiseContext:"disposeSwiWasmPromiseRequest",
+    makeBrowserPromiseRef:"cleanupSwiWasm2ShellEntry",disposeSwiWasmPromiseRequest:"requestSwiWasmWorkerRpc",
     handleSwiWasmWorkerActorMessage:"handleSwiWasmActorRequest",handleSwiWasmActorRequest:"requestSwiWasmActorInput",
     notifySwiWasmActorMonitors:"deliverSwiWasmActorDown",deliverSwiWasmActorDown:"clearSwiWasmActorNamesForPid",
     registerSwiWasmActorName:"unregisterSwiWasmActorName",unregisterSwiWasmActorName:"whereisSwiWasmActorName",
@@ -226,6 +229,7 @@ function scopedWorkerCoordinator(W, owner = PID) {
   host.swiWasmBehaviourProlog=()=>behaviourSource;
   host.resolveSwiWasmActorTarget=text=>String(text).replace(/^@\((\d+),\s*localhost\)$/, '$1').replace(/@localhost$/,'');
   let nextPid=7000000000,nextRef=8900000000;
+  host.randomSwiIdentity=()=>String(nextRef++);
   host.reserveSwiWasmActorRef=()=>String(nextRef++);
   host.reserveSwiWasmWorkerActorPid=watcher=>{const pid=String(nextPid++);host.swiWasmReservedWorkerActorPids[pid]=true;if(watcher!==undefined)host.trackSwiWasmStartup(watcher,pid);return pid;};
   host.log=()=>{};host.logSwiWasmWorkerTraffic=()=>{};
@@ -259,7 +263,7 @@ function scopedWorkerCoordinator(W, owner = PID) {
   W.S.workerTestError=e=>e.message;
   host.live=()=>Object.keys(host.swiWasmActorWorkers).filter(p=>p!==owner&&!host.swiWasmActorWorkers[p].done);
   host.scopeCount=()=>Object.keys(host.swiWasmWorkerScopes||{}).length;
-  host.stop=async()=>{await Promise.all([...threads].map(w=>w.terminate()));};
+  host.stop=async()=>{host.closeSwiWasmPromiseContext();await Promise.all([...threads].map(w=>w.terminate()));};
   return host;
 }
 
@@ -628,7 +632,7 @@ function compatibilityClientHarness() {
   global.self.swiRpcGet=url=>{calls.source.push(url);return "uri_fact(ok).";};
   global.self.swiRpcGetAsync=url=>{calls.rpc.push(url);return Promise.resolve("success([v(ok)],false)");};
   global.self._swiPromiseStore={items:{}};
-  const text=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+  const text=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = "),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
   const fetchMock=(url,options)=>{
     calls.promise.push({url,options});
     if(calls.hold)return new Promise(resolve=>{calls.complete=()=>resolve({text:()=>Promise.resolve("success([done],false)")});});
@@ -662,7 +666,7 @@ function isolatedPromiseEngine(mode) {
   } else {
     context.makeBrowserPromiseRef=()=>"1000000000";
     context.fetch=(url,options)=>new Promise(resolve=>requests.push({resolve,signal:options.signal}));
-    const text=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+    const text=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = "),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
     vm.runInContext(text,context);
     start=()=>context.swiPromiseStart("https://example.org",100);
     complete=value=>requests[0].resolve({text:()=>Promise.resolve(value)});
@@ -1128,7 +1132,7 @@ async function rpcHeaderContract(W,check,main) {
       global.self.swiRpcGet=url=>{requests.push({url:new URL(runtime.helpers.resolveBrowserRpcLoadUri(url),"https://example.org"),headers:{}});return "helper(ok).";};
       const asyncText=runtimeSource.slice(runtimeSource.indexOf("            window.swiRpcGetAsync = function"),runtimeSource.indexOf("            window.swiAbortRpc = function"));
       Function("window","fetch",asyncText)(global.self,fetchPeer);
-      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = "),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
       let next=8100000000;
       Function("self","window","fetch",storeText)({makeBrowserPromiseRef:()=>String(next++)},global.self,fetchPeer);
       global.self.setTimeout=setTimeout;global.self.clearTimeout=clearTimeout;
@@ -1201,7 +1205,7 @@ async function rpcDeadlineContract(W,check,main) {
       global.self.swiRpcGet=()=>"helper(ok).";
       const asyncText=runtimeSource.slice(runtimeSource.indexOf("            window.swiRpcGetAsync = function"),runtimeSource.indexOf("            window.swiAbortRpc = function"));
       Function("window","fetch",asyncText)(global.self,fetchPeer);
-      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = createSwiWasmPromiseStore"),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
+      const storeText=runtimeSource.slice(runtimeSource.indexOf("            window._swiPromiseStore = "),runtimeSource.indexOf('            return this.loadSwiWasmEngineBundle().then(function() {',runtimeSource.indexOf("            window.swiPromiseStart = function")));
       let next=8100000000;
       Function("self","window","fetch",storeText)({makeBrowserPromiseRef:()=>String(next++)},global.self,fetchPeer);
       global.self.setTimeout=setTimeout;global.self.clearTimeout=clearTimeout;
@@ -1825,12 +1829,61 @@ const scenarios = {
       await supervisorRestartContract(run,host,check);
     } finally {await host.stop();}
   },
+  async promise_context_worker(W, check) {
+    const host=scopedWorkerCoordinator(W);
+    host.requestSwiWasmWorkerRpc=message=>new Promise(resolve=>setTimeout(()=>resolve("success([v(ok)],false)."),String(message.goal).includes("pending")?100:0));
+    try {
+      await startToplevel(W,undefined,behaviourSource,"shell_toplevel");
+      const replies=()=>W.sends.filter(m=>m.to===CLIENT&&/^(success|failure|error)\(/.test(m.message)).map(m=>m.message);
+      async function run(goal,label) {
+        const before=replies().length;deliver(W,"'$call'(("+goal+"),[template(ok)])");
+        if(!await until(()=>replies().length>before,7000))throw new Error("no answer: "+label);
+        check(/^success\(/.test(replies()[before]),label+": "+replies()[before]);
+      }
+      const make="promise('https://example.org',pending,R,[template(v(ok))]),self(S),";
+      const receive="receive({result(A)->true},[timeout(3),on_timeout(throw(no_result))]),A==success([v(ok)],false)";
+      await run(make+"spawn((yield(R,A),send(S,result(A))),_,[link(false)]),"+receive,"child collects parent's pending promise");
+      await run("self(S),spawn((promise('https://example.org',pending,R,[template(v(ok))]),send(S,created(R))),C,[monitor(true)]),receive({created(R)->true}),receive({down(C,C,true)->true}),yield(R,success([v(ok)],false))","creator exits while its pending promise survives");
+      await run("self(S),spawn((promise('https://example.org',true,R,[template(v(ok))]),send(S,created(R))),_,[link(false)]),receive({created(R)->true}),spawn((yield(R,A),send(S,result(A))),_,[link(false)]),"+receive,"sibling collects a sibling's promise");
+      await run(make+"spawn(promise_cleanup(R),C,[monitor(true)]),receive({down(C,C,true)->true}),catch(yield(R,_),error(existence_error(promise,R),_),Missing=true),Missing==true","child disposes parent's promise");
+      await run(make+"setup_call_cleanup(true,true,promise_cleanup(R)),catch(yield(R,_),error(existence_error(promise,R),_),Missing=true),Missing==true","promise cleanup remains usable in a non-suspending Prolog cleanup handler");
+      await run(make+"spawn((yield(R,_),send(S,collected)),C,[link(false)]),receive({collected->true}),catch(yield(R,_),error(existence_error(promise,R),_),Missing=true),Missing==true","cross-engine commit consumes reference exactly once");
+      await run(make+"spawn((yield(R,wrong)->send(S,unexpected);send(S,mismatched)),_,[link(false)]),receive({mismatched->true}),catch(yield(R,_),error(existence_error(promise,R),_),Missing=true),Missing==true","output mismatch consumes the selected cross-engine result");
+    } finally {await host.stop();}
+  },
   async promise_worker_engine_isolation(W, check) {
     await promiseEngineIsolationContract("worker",check);
   },
   async compatibility_promise_engine_isolation(W, check) {
     await promiseEngineIsolationContract("main",check);
     await promiseEngineIsolationContract("main",(ok,label)=>check(ok,"separate main engines: "+label),"main");
+  },
+  async promise_context_claim_ownership(W, check) {
+    const host=scopedWorkerCoordinator(W),store=host.getSwiWasmPromiseContext();
+    try {
+      const other="7000000001";host.swiWasmActorWorkers[other]={done:false,worker:{postMessage(){}}};
+      const event=(owner,type,ref,token)=>host.handleSwiWasmWorkerActorMessage(owner,{data:{type,ref,token}});
+      const ref=store.create(()=>({promise:Promise.resolve("success([ok],false)"),cancel(){}}));
+      event(PID,"promise_claim",ref,"first");event(other,"promise_release",ref,"first");
+      check(store.items[ref].collector.owner===PID,"another actor cannot release a claim even with its token");
+      host.releaseSwiWasmPromiseCollectors(PID);event(other,"promise_claim",ref,"replacement");
+      event(PID,"promise_release",ref,"first");
+      check(store.items[ref].collector.token==="replacement","late cleanup cannot release a replacement actor claim");
+      const a=store.create(()=>({promise:new Promise(()=>{}),cancel(){}}));store.claim(a,PID,"own");
+      host.releaseSwiWasmPromiseCollectors(PID);
+      check(!store.items[a].collector&&store.items[ref].collector.token==="replacement","interruption releases only the interrupted actor claims");
+      const first=host.makeBrowserPromiseRef();host.swiWasmIssuedPromiseRefs[first]=true;
+      let calls=0;host.randomSwiIdentity=()=>++calls===1?first:"8999999999";
+      check(host.makeBrowserPromiseRef()==="8999999999"&&calls===2,"reference history rejects a previously issued number");
+      store.dispose(ref);store.dispose(a);
+      host.swiWasmActorWorkers[other].done=true;event(other,"promise_claim",ref,"late");
+      check(!store.items[ref],"dead actor claim cannot revive a disposed promise");
+      const unused={getSwiWasmPromiseContext:host.getSwiWasmPromiseContext,makeBrowserPromiseRef:()=>"1234567891"};
+      host.closeSwiWasmPromiseContext.call(unused);
+      const closed=unused.getSwiWasmPromiseContext();let rejected=false;
+      try {closed.create(()=>({promise:Promise.resolve("late")}));} catch(e) {rejected=/context closed/.test(e.message);}
+      check(rejected&&closed.claim("1234567891")==="missing_promise","closing an unused context blocks creation and leaves missing-reference access well defined");
+    } finally {await host.stop();}
   },
   async promise_store_lifecycle(W, check) {
     let clock=0,next=1,timerId=0;const timers=new Map();let cancelled=0;
@@ -1931,6 +1984,7 @@ const scenarios = {
     const host={swiWasmActorWorkers:{a:{},b:{}}};
     host.requestSwiWasmWorkerRpc=workbenchMethod("requestSwiWasmWorkerRpc","swiWasmRemoteWsUrl");
     host.disposeSwiWasmPromiseRequest=workbenchMethod("disposeSwiWasmPromiseRequest","requestSwiWasmWorkerRpc");
+    host.releaseSwiWasmPromiseCollectors=workbenchMethod("releaseSwiWasmPromiseCollectors","closeSwiWasmPromiseContext");
     const requests=[];global.fetch=(url,options)=>new Promise((resolve,reject)=>{
       requests.push({resolve,signal:options.signal});options.signal.addEventListener("abort",()=>reject(new Error("aborted")),{once:true});
     });
