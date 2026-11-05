@@ -1247,6 +1247,30 @@
             if (this.swiWasmPromiseContext) this.swiWasmPromiseContext.close();
             // Keep the registry and reference history until this runtime dies.
           },
+          closeSwiWasmRemoteContext: function(node, entry) {
+            if (entry.contextClosing) return entry.contextClosing;
+            var self = this;
+            entry.contextClosing = Promise.resolve(entry.connecting || entry).then(function() {
+              if (!entry.contextCloseSupported) throw new Error("remote context closure is unsupported: " + node);
+              return new Promise(function(resolve,reject) {
+                if (!entry.socket || entry.socket.readyState !== WebSocket.OPEN) {
+                  reject(new Error("remote context closure is unconfirmed: " + node)); return;
+                }
+                var id = self.reserveSwiWasmActorRef(), timer;
+                entry.contextCloseReply = {id:id, finish:function(error) {
+                  clearTimeout(timer); entry.contextCloseReply = null;
+                  if (error) reject(error); else { entry.contextRetired=true; resolve(true); }
+                }};
+                timer = setTimeout(function() {
+                  if (entry.contextCloseReply) entry.contextCloseReply.finish(new Error("remote context closure timed out: " + node));
+                }, 5000);
+                try { entry.socket.send(JSON.stringify({command:"context_close",request_id:id})); }
+                catch (error) { entry.contextCloseReply.finish(error); }
+              });
+            });
+            entry.contextClosing.catch(function() {});
+            return entry.contextClosing;
+          },
           closeSwiWasmClientContext: function() {
             // Retire admission before cancellation or rollback can call back.
             this.swiWasmClientContextClosed = true;
@@ -1257,6 +1281,15 @@
             }.bind(this));
             this.closeSwiWasmPromiseContext();
             // Existing actors and owner service names have separate lifetimes.
+            if (!this.swiWasmClientContextClosing) {
+              this.swiWasmClientContextClosing = Promise.all(Object.keys(this.swiWasmRemoteActorConnections || {}).map(function(node) {
+                return this.closeSwiWasmRemoteContext(node,this.swiWasmRemoteActorConnections[node]);
+              }.bind(this)));
+              // dispose() closes transports independently; explicit callers can
+              // await this promise to distinguish acknowledgement from loss.
+              this.swiWasmClientContextClosing.catch(function() {});
+            }
+            return this.swiWasmClientContextClosing;
           },
           disposeSwiWasmPromiseRequest: function(pid, ref) {
             this.releaseSwiWasmPromiseCollectors(pid);
@@ -1372,6 +1405,7 @@
             if (existing && existing.connecting) {
               return existing.connecting;
             }
+            if (this.swiWasmClientContextClosed) return Promise.reject(new Error("client context closed"));
             var entry = existing || { pendingSpawns: [], toplevelTemplates: {}, toplevelTargets: {} };
             entry.toplevelTargets = entry.toplevelTargets || {};
             entry.ioAck = false;
@@ -1443,7 +1477,13 @@
                   entry.protocol = message.version;
                   entry.ioAck = true;
                   entry.answerTerms = message.answer_terms === true;
+                  entry.contextCloseSupported = message.context_close === true;
                   settleResolve(entry);
+                  return;
+                }
+                if (entry.contextCloseReply && String(message.request_id) === entry.contextCloseReply.id &&
+                    (message.type === "context_closed" || message.type === "error")) {
+                  entry.contextCloseReply.finish(message.type === "context_closed" ? null : new Error(String(message.data || "remote context closure failed")));
                   return;
                 }
                 if (message.type === "io_request") {
@@ -1552,6 +1592,7 @@
                 if (message.type === "output" && message.data) self.emitSwiWasmOutput(String(message.data));
               };
               socket.onclose = function() {
+                if (entry.contextCloseReply) entry.contextCloseReply.finish(new Error("connection closed before context acknowledgement"));
                 if (retryLegacy()) return;
                 //  Close before open settles the connect promise (no-op once
                 //  opened); a mid-session close falls through to the cleanup.
@@ -2763,6 +2804,10 @@
               "           term_string(Name, ReleaseName),",
               "           catch((_ := swiWasmNameRelease(#Token, #ReleaseName)),_,true) ))",
               "    ; Inner = Options, call(Goal) ).",
+              "browser_outgoing_message(Pid, Message, '$call'(Goal,Options)) :-",
+              "    nonvar(Message), Message = '$call'(Goal0,Options),",
+              "    nonvar(Pid), Pid = _@Node, Node \\== localhost, !, strip_module(Goal0,_,Goal).",
+              "browser_outgoing_message(_, Message, Message).",
               "browser_name_error(Status, Name, PI) :-",
               "    ( memberchk(Status, [connection_closed,terminated]) -> throw(error(remote_spawn_failed(Status),PI))",
               "    ; string(Status), memberchk(Status, [\"connection_closed\",\"terminated\"]) -> atom_string(Reason,Status), throw(error(remote_spawn_failed(Reason),PI))",
@@ -3407,7 +3452,7 @@
               "        await(SpawnPromise, SpawnedText),",
               "        ( SpawnedText = null -> throw(error(resource_error(swi_wasm_worker_actor), spawn/3)) ; term_string(SpawnedPid, SpawnedText), SpawnedPid == LocalPid )",
               "    ;   collect_remote_spawn_source(Goal, Options, ExtraSource),",
-              "        term_string(Goal, GoalText),",
+              "        strip_module(Goal, _, RemoteGoal), term_string(RemoteGoal, GoalText),",
               "        term_string(Node, NodeText),",
               "        Promise := swiWasmActorRemoteSpawn(#NodeText, #GoalText, #ExtraSource),",
               "        await(Promise, RemotePidText),",
@@ -3675,7 +3720,7 @@
               "    must_be_transportable_term(Message),",
               "    delayed_send_id(Options, Id),",
               "    term_string(Pid, PidText),",
-              "    wire_text(Message, MessageText),",
+              "    browser_outgoing_message(Pid,Message,WireMessage), wire_text(WireMessage, MessageText),",
               "    term_string(Id, IdText),",
               "    Sent := swiWasmActorSendDelayed(#PidText, #MessageText, #Delay, #IdText),",
               "    Sent == true.",
@@ -3697,7 +3742,7 @@
               "    validate_actor_target(Pid),",
               "    must_be_transportable_term(Message),",
               "    term_string(Pid, PidText),",
-              "    wire_text(Message, MessageText),",
+              "    browser_outgoing_message(Pid,Message,WireMessage), wire_text(WireMessage, MessageText),",
               "    Promise := swiWasmActorSend(#PidText, #MessageText),",
               "    await(Promise, Sent),",
               "    (   Sent == true",
@@ -3912,7 +3957,7 @@
               "toplevel_call(Pid, Goal, Options) :- validate_once_options(Options), validate_solution_limit(Options),",
               "    term_string(Pid, PidText),",
               "    (   remote_toplevel_pid_text(PidText)",
-              "    ->  term_string(Goal, GoalText),",
+              "    ->  strip_module(Goal, _, RemoteGoal), term_string(RemoteGoal, GoalText),",
               "        option(template(Template0), Options, Goal),",
               "        strip_module(Template0, _, Template), term_string(Template, TemplateText),",
               "        solution_limit(Options, Limit), option(offset(Offset), Options, 0), option(once(Once), Options, false),",
@@ -3923,7 +3968,7 @@
               "synchronous_remote_support(Node, Supported) :-",
               "    term_string(Node, NodeText), Promise := swiWasmToplevelCorrelation(#NodeText), await(Promise, Supported).",
               "synchronous_send(Pid, Message) :-",
-              "    term_string(Pid, PidText), term_string(Message, MessageText),",
+              "    term_string(Pid, PidText), browser_outgoing_message(Pid,Message,WireMessage), term_string(WireMessage, MessageText),",
               "    Promise := swiWasmSynchronousSend(#PidText, #MessageText), await(Promise, Sent),",
               "    ( Sent == true -> true ; Pid = _@Node, throw(error(permission_error(use,toplevel_correlation,Node),_)) ).",
               "remote_toplevel_pid_text(Text) :-",
@@ -4421,7 +4466,7 @@
               "    validate_rpc_client_options(rpc, Opts), browser_rpc_uri(URL0, URL),",
               "    term_variables(Goal, Vars),",
               "    Template =.. [v|Vars],",
-              "    wire_texts([Goal, Template], [GoalAtom, TplAtom]),",
+              "    strip_module(Goal, _, RemoteGoal), wire_texts([RemoteGoal, Template], [GoalAtom, TplAtom]),",
               "    solution_limit(Opts, Lim),",
               "    web_rpc_base_url(URL, Opts, BaseRPCURL),",
               "    collect_rpc_load(Opts, Parts),",
@@ -4516,7 +4561,7 @@
               "    ).",
               "",
               "web_rpc_url(URL, Goal, Template, Offset, Lim, Opts, RemoteTimeout, Once, FinalURL) :-",
-              "    wire_texts([Goal, Template], [GoalAtom, TplAtom]),",
+              "    strip_module(Goal, _, RemoteGoal), wire_texts([RemoteGoal, Template], [GoalAtom, TplAtom]),",
               "    web_rpc_base_url(URL, Opts, BaseRPCURL),",
               "    GoalEnc := encodeURIComponent(#GoalAtom),",
               "    TplEnc  := encodeURIComponent(#TplAtom),",

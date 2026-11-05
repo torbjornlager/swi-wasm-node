@@ -117,6 +117,17 @@ and owner service names retain their separate lifetimes. Repeated closure is
 harmless; registration, reservation, publication and commit cannot reopen the
 closed scope. The promise-only close hook remains available for promise-store
 teardown and does not close ordinary names.
+The returned promise confirms scope retirement at connected native peers after
+they advertise `context_close:true`. Unsupported peers, timeout and connection
+loss reject confirmation. A connecting transport may finish its handshake only
+to retire the scope; a closed context cannot reconnect as a fresh context.
+Existing peer actor interactions remain available. Full `dispose()` separately
+closes sockets and actors without awaiting peer confirmation.
+
+Remote goals and toplevel control messages omit their caller's outer module
+qualification, as native goal export does. Nested qualifications and data are
+preserved, along with goal/template variable sharing.
+
 New child allocation and deferred remote dispatch also reject a closed context:
 source arriving after rollback cannot start a child without a startup owner.
 
