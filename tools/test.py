@@ -53,6 +53,8 @@ def main():
             env['LIBRARY_REPORT']=str(a.report/'standard-library-browser.json')
             rows.append(run('standard-library-browser',[node,'tests/wasm/swi_wasm_library_browser.cjs'],env,root,a.report))
             rows.append(run('session-api-browser',[node,'tests/wasm/swi_wasm_sessions_browser.cjs'],env,root,a.report))
+            env['LIBRARY_REPORT']=str(a.report/'selective-receive-browser.json')
+            rows.append(run('selective-receive-browser',[node,'tests/wasm/swi_wasm_receive_browser.cjs'],env,root,a.report))
             (a.report/'results.json').write_text(json.dumps(dict(source=manifest['source'],native_integration=bool(a.native_root),host_integration=bool(env.get('SWI_WASM_TEST_HOST')),runs=rows),indent=2)+'\n')
         finally:server.shutdown();server.server_close();thread.join()
     verify(root)

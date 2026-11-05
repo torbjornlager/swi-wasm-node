@@ -409,7 +409,7 @@ function createSwiWasmPromiseStore(options) {
         resolve: function(value) { if (timer) clearTimeout(timer); resolve(value); },
         reject: function(error) { if (timer) clearTimeout(timer); reject(error); }
       };
-      post("request", Object.assign({ id: id, action: action }, fields || {}));
+      post("request", Object.assign({}, fields || {}, { id: id, action: action }));
     });
   }
 
@@ -455,12 +455,12 @@ function createSwiWasmPromiseStore(options) {
       to: String(toText),
       message: String(messageText),
       delay: Number(delaySeconds),
-      id: String(idText)
+      delayId: String(idText)
     });
   }
 
   function actorCancel(idText) {
-    return actorRequest("cancel", { id: String(idText) });
+    return actorRequest("cancel", { delayId: String(idText) });
   }
 
   function actorSpawn(goalText, sourceText) {
@@ -2480,20 +2480,23 @@ function createSwiWasmPromiseStore(options) {
       "receive_plain_var(Var) :- var(Var).",
       "",
       "receive_loop(Clauses, Options) :-",
-      "    receive_timeout(Options, Timeout),",
-      "    Promise := actorReceive(#Timeout),",
-      "    actor_await(Promise, MessageText),",
+      "    receive_wait_budget(Options, Budget), receive_loop_until(Clauses, Options, Budget).",
+      "receive_loop_until(Clauses, Options, Budget) :-",
+      "    receive_remaining(Budget, Timeout),",
+      "    ( Budget = until(_), Timeout =:= 0 -> MessageText = null",
+      "    ; Promise := actorReceive(#Timeout),",
+      "      actor_await(Promise, MessageText) ),",
       "    (   MessageText = null",
       "    ->  option(on_timeout(Goal), Options, true),",
       "        clauses_module(Clauses, Module),",
       "        call(Module:Goal)",
       "    ;   remote_answer_message(MessageText, Msg),",
-      "        ( (discard_server_monitor_message(Msg) ; discard_worker_scope_message(Msg)) -> receive_loop(Clauses, Options)",
+      "        ( (discard_server_monitor_message(Msg) ; discard_worker_scope_message(Msg)) -> receive_loop_until(Clauses, Options, Budget)",
       "        ; assertz(deferred(Msg), Ref),",
       "        (   select_body(Clauses, Msg, Module, Body)",
       "        ->  erase(Ref),",
       "            call(Module:Body)",
-      "        ;   receive_loop(Clauses, Options)",
+      "        ;   receive_loop_until(Clauses, Options, Budget)",
       "        ) )",
       "    ).",
       "",
@@ -2516,11 +2519,13 @@ function createSwiWasmPromiseStore(options) {
       "control_exception('$aborted').",
       "control_exception(unwind(_)).",
       "",
-      "receive_timeout(Options, Timeout) :-",
-      "    (   option(timeout(Timeout0), Options)",
-      "    ->  Timeout = Timeout0",
-      "    ;   Timeout = -1",
-      "    ).",
+      "receive_wait_budget(Options, Budget) :-",
+      "    ( option(timeout(T), Options)",
+      "    -> ( T > 0 -> get_time(Now), D is Now+T, Budget=until(D) ; Budget=relative(T) )",
+      "    ; option(deadline(D), Options) -> Budget=until(D)",
+      "    ; Budget=relative(-1) ).",
+      "receive_remaining(relative(T), T).",
+      "receive_remaining(until(D), T) :- get_time(Now), T is max(0,D-Now).",
       "",
       "clauses_module(M:_, M) :- !.",
       "clauses_module(_, user).",

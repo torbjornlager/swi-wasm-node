@@ -2037,10 +2037,10 @@
                 result = this.sendSwiWasmActorMessage(message.to, message.message, message.from || pid);
                 break;
               case "send_delayed":
-                result = this.sendSwiWasmActorMessageDelayed(message.to, message.message, message.delay, message.id);
+                result = this.sendSwiWasmActorMessageDelayed(message.to, message.message, message.delay, message.delayId);
                 break;
               case "cancel":
-                result = this.cancelSwiWasmActorMessage(message.id);
+                result = this.cancelSwiWasmActorMessage(message.delayId);
                 break;
               case "actors":
                 result = this.swiWasmActorListText();
@@ -4211,20 +4211,23 @@
               "receive_plain_var(Var) :- var(Var).",
               "",
               "receive_loop(Clauses, Options) :-",
-              "    receive_timeout(Options, Timeout),",
-              "    Promise := swiWasmActorReceive(#Timeout),",
-              "    await(Promise, MessageText),",
+              "    receive_wait_budget(Options, Budget), receive_loop_until(Clauses, Options, Budget).",
+              "receive_loop_until(Clauses, Options, Budget) :-",
+              "    receive_remaining(Budget, Timeout),",
+              "    ( Budget = until(_), Timeout =:= 0 -> MessageText = null",
+              "    ; Promise := swiWasmActorReceive(#Timeout),",
+              "      await(Promise, MessageText) ),",
               "    (   MessageText = null",
               "    ->  option(on_timeout(Goal), Options, true),",
               "        clauses_module(Clauses, Module),",
               "        call(Module:Goal)",
               "    ;   remote_answer_message(MessageText, Msg),",
-              "        ( (discard_server_monitor_message(Msg) ; discard_worker_scope_message(Msg)) -> receive_loop(Clauses, Options)",
+              "        ( (discard_server_monitor_message(Msg) ; discard_worker_scope_message(Msg)) -> receive_loop_until(Clauses, Options, Budget)",
               "        ; assertz(deferred(Msg), Ref),",
               "        (   select_body(Clauses, Msg, Module, Body)",
               "        ->  erase(Ref),",
               "            call(Module:Body)",
-              "        ;   receive_loop(Clauses, Options)",
+              "        ;   receive_loop_until(Clauses, Options, Budget)",
               "        ) )",
               "    ).",
               "",
@@ -4286,11 +4289,13 @@
               "remote_answer_payload(success, Payload) :- is_list(Payload).",
               "remote_answer_payload(error, _).",
               "",
-              "receive_timeout(Options, Timeout) :-",
-              "    (   option(timeout(Timeout0), Options)",
-              "    ->  Timeout = Timeout0",
-              "    ;   Timeout = -1",
-              "    ).",
+              "receive_wait_budget(Options, Budget) :-",
+              "    ( option(timeout(T), Options)",
+              "    -> ( T > 0 -> get_time(Now), D is Now+T, Budget=until(D) ; Budget=relative(T) )",
+              "    ; option(deadline(D), Options) -> Budget=until(D)",
+              "    ; Budget=relative(-1) ).",
+              "receive_remaining(relative(T), T).",
+              "receive_remaining(until(D), T) :- get_time(Now), T is max(0,D-Now).",
               "",
               "clauses_module(M:_, M) :- !.",
               "clauses_module(_, user).",
