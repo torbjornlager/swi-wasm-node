@@ -2372,15 +2372,14 @@
             }
             localEntry = pid === "statechart" ? this.swiWasmLocalChartResult : this.swiWasmActorWorkers[pid];
             if (!this.swiWasmActorPidLive(pid)) {
-              // The worker may finish between spawn's ready reply and
-              // install_spawn_monitor/2. Its entry is intentionally retained,
-              // so a late monitor must observe the recorded reason rather
-              // than losing false/exception as the generic no_process reason.
+              // Spawn monitoring carries the pid itself as its reference and
+              // observes the recorded reason if completion beat the ready reply.
+              // A new explicit monitor on a dead target observes no_process.
               this.deliverSwiWasmActorDown(
                 watcher,
                 ref,
                 pid,
-                localEntry && localEntry.done
+                localEntry && localEntry.done && localizeSwiWasmPid(ref) === pid
                   ? (localEntry.reason || "true")
                   : "no_process"
               );
@@ -2825,6 +2824,11 @@
               "    nonvar(Message), Message = '$call'(Goal0,Options),",
               "    nonvar(Pid), Pid = _@Node, Node \\== localhost, !, strip_module(Goal0,_,Goal).",
               "browser_outgoing_message(_, Message, Message).",
+              "validate_browser_demonitor(Ref, Options) :-",
+              "    must_be(ground, Ref), must_be(list, Options), maplist(validate_browser_demonitor_option, Options).",
+              "validate_browser_demonitor_option(Option) :-",
+              "    must_be(nonvar, Option),",
+              "    (Option == flush -> true ; throw(error(domain_error(demonitor_option,Option),demonitor/2))).",
               "browser_demonitor_result(Status) :-",
               "    ( string(Status), catch(wire_read(Status,remote_demonitor_timeout(Pid)),_,fail)",
               "    -> throw(error(remote_demonitor_timeout(Pid),demonitor/2)) ; true ).",
@@ -3783,6 +3787,7 @@
               "demonitor(Ref) :- demonitor(Ref, []).",
               "",
               "demonitor(Ref, Options) :-",
+              "    validate_browser_demonitor(Ref, Options),",
               "    term_string(Ref, RefText),",
               "    Promise := swiWasmActorDemonitor(#RefText),",
               "    await(Promise, Status), browser_demonitor_result(Status),",

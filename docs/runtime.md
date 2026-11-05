@@ -49,6 +49,24 @@ terminated by the browser. Neither remains alive after its page is destroyed.
 The bundled engine is pinned to `swipl-wasm@8.2.5` (SWI-Prolog 10.1.19), with
 package integrity and bundle checksum in `dependencies/swi-wasm.json`.
 
+## Monitor validation and completion
+
+`monitor/2` accepts a pid or registered local name and returns a fresh opaque
+reference. Spawn-time monitoring preserves an immediate child's actual exit
+reason. A new explicit monitor after the observed target has terminated delivers
+`down(Pid, Ref, no_process)`; retained spawn-completion information does not change
+that result. Independent spawn, explicit and private wait references remain
+separate observations.
+
+Both `demonitor/1` and `demonitor/2` require an instantiated ground reference.
+The options must be a proper list containing only the atom `flush`; repetition
+is accepted. Every occurrence is validated before withdrawal or mailbox changes.
+Unknown options and wrong arities raise
+`error(domain_error(demonitor_option, Option), Context)`. Invalid calls retain
+the monitor and queued notifications. See the
+[transport contract](browser_actor_transport.md) for remote confirmation,
+connection loss and retry behavior.
+
 ## Language text and native boundaries
 
 Both browser modes initialise `user:double_quotes` to `chars`. Goals and options,
