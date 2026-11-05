@@ -2581,6 +2581,22 @@
           },
           swiWasmBehaviourProlog: function() {
             return [
+              ":- export(maplist/6).",
+              ":- export(maplist/7).",
+              ":- export(maplist/8).",
+              ":- export(countall/2).",
+              ":- use_module(library(aggregate),[aggregate_all/3]).",
+              ":- meta_predicate maplist(5,?,?,?,?,?),maplist(6,?,?,?,?,?,?),maplist(7,?,?,?,?,?,?,?),countall(0,?).",
+              "wasm_library_callable(G):-nonvar(G),G=(_M:C),!,wasm_library_callable(C).",
+              "wasm_library_callable(G):-must_be(callable,G).",
+              "maplist(_,[],[],[],[],[]).",
+              "maplist(G,[A|As],[B|Bs],[C|Cs],[D|Ds],[E|Es]):-wasm_library_callable(G),call(G,A,B,C,D,E),maplist(G,As,Bs,Cs,Ds,Es).",
+              "maplist(_,[],[],[],[],[],[]).",
+              "maplist(G,[A|As],[B|Bs],[C|Cs],[D|Ds],[E|Es],[F|Fs]):-wasm_library_callable(G),call(G,A,B,C,D,E,F),maplist(G,As,Bs,Cs,Ds,Es,Fs).",
+              "maplist(_,[],[],[],[],[],[],[]).",
+              "maplist(G,[A|As],[B|Bs],[C|Cs],[D|Ds],[E|Es],[F|Fs],[H|Hs]):-wasm_library_callable(G),call(G,A,B,C,D,E,F,H),maplist(G,As,Bs,Cs,Ds,Es,Fs,Hs).",
+              "countall(Goal,Count):-aggregate_all(count,Goal,Actual),Count=Actual.",
+
               "% Browser-worker implementation of generic servers and supervisors.",
               ":- meta_predicate server_spawn(:, +, -), server_spawn(:, +, -, +), server_upgrade(+, :), server_upgrade(+, :, +), supervisor_spawn(:, -), supervisor_spawn(:, -, +), supervisor_spawn_child(+, :, -), wasm_startup_scope(0), browser_named_creation(+, -, +, -, 0).",
               "browser_statechart_source(Options,Kind,Source) :-",

@@ -111,3 +111,20 @@ Our runtime is MIT licensed. SWI-Prolog's bundled copyright/redistribution terms
 are retained in [third_party/LICENSE.txt](third_party/LICENSE.txt), copied from the
 integrity-verified npm tarball. The engine package, source commit and integrity
 are pinned in `dependencies/swi-wasm.json`.
+
+
+The development runtime supplies Appendix B's `maplist/6-8` and `countall/2`
+in both execution modes and their spawned actors, without explicit user imports.
+Private-source callbacks keep their calling module. The real-browser library
+regression runs the mirrored shared fixture in `tests/fixtures/standard-library.json`
+and a copied-source child control. It is included when `tools/test.py` selects
+`--browser-executable`; an external shared fixture may be supplied using
+`LIBRARY_MANIFEST`. Development packages require `--allow-dirty` and must not be
+used as release pins.
+
+Library callbacks validate callable values when invoked. Uninstantiated values
+raise `instantiation_error`; invalid values raise `type_error(callable, Value)`
+with the original culprit. Empty iteration and vacuous `forall` tests leave unused
+callbacks alone, and application exceptions propagate unchanged. ISO `call/N`
+keeps the underlying runtime's existing error contract. The shared fixture
+includes exact callback errors for every required `maplist` and `foldl` arity.
