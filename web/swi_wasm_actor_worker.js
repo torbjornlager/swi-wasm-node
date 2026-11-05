@@ -1062,7 +1062,7 @@ function createSwiWasmPromiseStore(options) {
   self.swiWasmNameToken = function() { return "name-" + (++nextName); };
   self.swiWasmNameReserve = function(token, name) { return actorRequest("name_reserve", {token:String(token), name:String(name)}); };
   self.swiWasmNamePublish = function(token, name, pid, live) { return actorRequest("name_publish", {token:String(token), name:String(name), pid:String(pid), chartLive:live}); };
-  self.swiWasmNameCommit = function(token, name) { post("name_commit", {token:String(token), name:String(name)}); return true; };
+  self.swiWasmNameCommit = function(token, name) { return actorRequest("name_commit", {token:String(token), name:String(name)}); };
   self.swiWasmNameRelease = function(token, name) { post("name_release", {token:String(token), name:String(name)}); return true; };
   self.swiWasmStartupErrorText = function(error) { return String(error && error.message || error); };
   var nextStartup = 0;

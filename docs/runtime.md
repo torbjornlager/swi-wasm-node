@@ -110,6 +110,25 @@ acknowledgement cannot publish an abandoned creation. Cancellation before socket
 readiness prevents late dispatch. Pending records last until acknowledgement
 or connection close; remote side effects cannot be undone.
 
+The host's `closeSwiWasmClientContext()` lifecycle hook closes ordinary-name
+and promise admission together. It removes ordinary aliases, retires pending
+name reservations and rolls back their uncommitted children. Existing actors
+and owner service names retain their separate lifetimes. Repeated closure is
+harmless; registration, reservation, publication and commit cannot reopen the
+closed scope. The promise-only close hook remains available for promise-store
+teardown and does not close ordinary names.
+New child allocation and deferred remote dispatch also reject a closed context:
+source arriving after rollback cannot start a child without a startup owner.
+
+Named creation awaits coordinator confirmation of commit in both modes. If
+closure wins before commit, creation reports failure and reclaims its prepared
+child. If commit wins, scope closure removes the alias while the committed actor
+survives. Session `dispose()` closes admission before interrupting queries and
+then performs full actor/transport teardown. The maintained real-Chrome context
+closure tests pause real child creation at publication and commit boundaries.
+They also hold fetched URI source before child allocation; the source response
+is supplied by a browser network fixture, without contacting a public node.
+
 Remote spawn uses `request_id` correlation. Named startup rejects untagged
 replies, while unnamed startup retains the legacy FIFO fallback. Reordered
 replies settle their own requests; tagged cleanup exits cannot consume another

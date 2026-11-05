@@ -212,7 +212,7 @@ function scopedWorkerCoordinator(W, owner = PID) {
     spawnSwiWasmWorkerActor:"spawnSwiWasmWorkerActorReady",spawnSwiWasmWorkerActorReady:"swiWasmRemoteNodeUrl",swiWasmRemoteNodeUrl:"loadSwiWasmUriSource",
     spawnSwiWasmStatechartActor:"disposeSwiWasmPromiseRequest",whereisSwiWasmActorName:"swiWasmActorPidLive",
     getSwiWasmPromiseContext:"createSwiWasmContextPromise", createSwiWasmContextPromise:"releaseSwiWasmPromiseCollectors",
-    releaseSwiWasmPromiseCollectors:"closeSwiWasmPromiseContext",closeSwiWasmPromiseContext:"disposeSwiWasmPromiseRequest",
+    releaseSwiWasmPromiseCollectors:"closeSwiWasmPromiseContext",closeSwiWasmPromiseContext:"closeSwiWasmClientContext",closeSwiWasmClientContext:"disposeSwiWasmPromiseRequest",
     makeBrowserPromiseRef:"cleanupSwiWasm2ShellEntry",disposeSwiWasmPromiseRequest:"requestSwiWasmWorkerRpc",
     handleSwiWasmWorkerActorMessage:"handleSwiWasmActorRequest",handleSwiWasmActorRequest:"requestSwiWasmActorInput",
     notifySwiWasmActorMonitors:"deliverSwiWasmActorDown",deliverSwiWasmActorDown:"clearSwiWasmActorNamesForPid",
@@ -333,7 +333,7 @@ function spawnOptionMainHarness() {
     swiWasmNameToken:()=>"mock-name",
     swiWasmNameReserve:(...args)=>Promise.resolve(record("name_reserve",args,"reserved")),
     swiWasmNamePublish:(...args)=>Promise.resolve(record("name_publish",args,"published")),
-    swiWasmNameCommit:()=>true,
+    swiWasmNameCommit:()=>Promise.resolve(true),
     swiWasmNameRelease:()=>true,
     swiWasmStartupOpen:()=>"mock-startup",
     swiWasmStartupFinish:()=>true,
@@ -3290,7 +3290,8 @@ if (require.main === module && process.argv[2]) {
     lines.forEach(function(l) { console.log(l); });
     if (r.status !== 0 || lines.length === 0) {
       failed++;
-      if (lines.length === 0) console.log("  FAIL " + name + ": no result" + (r.stderr ? " (" + r.stderr.trim().split("\n").pop() + ")" : ""));
+      console.log("  FAIL " + name + ": child exit=" + r.status + " signal=" + r.signal +
+        (r.error ? " " + r.error.message : "") + (r.stderr ? "\n" + r.stderr.trim() : ""));
     }
   });
   console.log(failed ? failed + " scenario(s) failed" : "all scenarios passed");

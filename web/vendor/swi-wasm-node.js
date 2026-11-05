@@ -628,7 +628,7 @@
               } else { self.stopSwiWasmLocalChart("true"); window.swiStatechartDocumentBase = ""; }
               return true;
             };
-            window.swiWasmNameCommit = function(token, name) { return self.commitSwiWasmName("main", token, name); };
+            window.swiWasmNameCommit = function(token, name) { return Promise.resolve(self.commitSwiWasmName("main", token, name)); };
             window.swiWasmNameRelease = function(token, name) { return self.releaseSwiWasmName("main", token, name); };
             window.swiWasmStartupErrorText = function(error) { return String(error && error.message || error); };
             window.swiWasmStartupOpen = function() {
@@ -822,6 +822,7 @@
             return String(1000000000 + (value % 9000000000));
           },
           reserveSwiWasmWorkerActorPid: function(owner) {
+            if (this.swiWasmClientContextClosed) throw new Error("client context closed");
             var pid;
             this.swiWasmIssuedIdentities = this.swiWasmIssuedIdentities || {};
             do { pid = this.randomSwiIdentity(); }
@@ -897,6 +898,7 @@
             return true;
           },
           reserveSwiWasmName: function(owner, token, name) {
+            if (this.swiWasmClientContextClosed) return "closed";
             this.swiWasmNameReservations = this.swiWasmNameReservations || Object.create(null);
             var registry = this.swiWasmActorNames, reservations = this.swiWasmNameReservations;
             name = String(name); owner = String(owner); token = String(token);
@@ -907,6 +909,7 @@
             return "reserved";
           },
           publishSwiWasmName: function(owner, token, name, pidText, chartLive) {
+            if (this.swiWasmClientContextClosed) return "closed";
             name = String(name);
             var reservation = (this.swiWasmNameReservations || {})[name];
             if (!reservation || reservation.owner !== String(owner) || reservation.token !== String(token)) return "missing";
@@ -930,6 +933,7 @@
             return "published";
           },
           commitSwiWasmName: function(owner, token, name) {
+            if (this.swiWasmClientContextClosed) return false;
             name = String(name);
             var r = (this.swiWasmNameReservations || {})[name];
             if (!r || r.owner !== String(owner) || r.token !== String(token) || r.pid === undefined) return false;
@@ -1032,6 +1036,7 @@
             this.sendSwiWasmActorMessage(watcher, "'$worker_scope_closed'('" + String(token).replace(/'/g, "''") + "')");
           },
           spawnSwiWasmWorkerActor: function(goalText, extraSourceText, pidText, nameText, roleText, startFields) {
+            if (this.swiWasmClientContextClosed) throw new Error("client context closed");
             var self = this;
             var pid = pidText ? String(pidText) : this.reserveSwiWasmWorkerActorPid();
             var worker;
@@ -1241,6 +1246,17 @@
             this.swiWasmPromiseContextClosed = true;
             if (this.swiWasmPromiseContext) this.swiWasmPromiseContext.close();
             // Keep the registry and reference history until this runtime dies.
+          },
+          closeSwiWasmClientContext: function() {
+            // Retire admission before cancellation or rollback can call back.
+            this.swiWasmClientContextClosed = true;
+            this.swiWasmActorNames = Object.create(null);
+            Object.keys(this.swiWasmNameReservations || {}).forEach(function(name) {
+              var r = this.swiWasmNameReservations[name];
+              this.releaseSwiWasmName(r.owner, r.token, name);
+            }.bind(this));
+            this.closeSwiWasmPromiseContext();
+            // Existing actors and owner service names have separate lifetimes.
           },
           disposeSwiWasmPromiseRequest: function(pid, ref) {
             this.releaseSwiWasmPromiseCollectors(pid);
@@ -1604,6 +1620,7 @@
             });
           },
           spawnSwiWasmRemoteActor: function(nodeText, goalText, sourceText, owner) {
+            if (this.swiWasmClientContextClosed) return Promise.reject(new Error("client context closed"));
             var self = this;
             var node = this.swiWasmRemoteNodeUrl(nodeText);
             // Remote ACTOR nodes execute their advertised predicates.  Do not
@@ -1617,7 +1634,7 @@
             return new Promise(function(resolve, reject) {
               var op = self.swiWasmRemoteSpawnOperation(owner, "actor", "", resolve, reject);
               self.ensureSwiWasmRemoteActorConnection(node).then(function(entry) {
-                if (op.scopes.some(function(scope) { return scope.aborted; })) throw new Error("remote named startup cancelled");
+                if (self.swiWasmClientContextClosed || op.scopes.some(function(scope) { return scope.aborted; })) throw new Error("remote named startup cancelled");
                 entry.pendingSpawns.push(op);
                 try {
                   entry.socket.send(JSON.stringify({
@@ -1634,6 +1651,7 @@
           },
           spawnSwiWasmRemoteToplevel: function(nodeText, sourceText, sessionText, targetPid,
                                                timeLimitText, idleLimitText, owner) {
+            if (this.swiWasmClientContextClosed) return Promise.reject(new Error("client context closed"));
             var self = this;
             var node = this.swiWasmRemoteNodeUrl(nodeText);
             var source = String(sourceText || "");
@@ -1641,7 +1659,7 @@
             return new Promise(function(resolve, reject) {
               var op = self.swiWasmRemoteSpawnOperation(owner, "toplevel", targetPid, resolve, reject);
               self.ensureSwiWasmRemoteActorConnection(node).then(function(entry) {
-                if (op.scopes.some(function(scope) { return scope.aborted; })) throw new Error("remote named startup cancelled");
+                if (self.swiWasmClientContextClosed || op.scopes.some(function(scope) { return scope.aborted; })) throw new Error("remote named startup cancelled");
                 entry.pendingSpawns.push(op);
                 try {
                   entry.socket.send(JSON.stringify({
@@ -1957,6 +1975,9 @@
               case "name_publish":
                 result = this.publishSwiWasmName(pid, message.token, message.name, message.pid);
                 break;
+              case "name_commit":
+                result = this.commitSwiWasmName(pid, message.token, message.name);
+                break;
               case "worker_scope_reserve":
                 result = this.reserveSwiWasmScopedWorker(pid, message.scope);
                 break;
@@ -2221,6 +2242,7 @@
             return true;
           },
           registerSwiWasmActorName: function(kind, nameText, pidText) {
+            if (String(kind || "actor") !== "service" && this.swiWasmClientContextClosed) return false;
             var registry = String(kind || "actor") === "service" ? this.swiWasmActorServices : this.swiWasmActorNames;
             var name = String(nameText || "");
             var pid = this.resolveSwiWasmActorTarget(pidText);
@@ -2523,7 +2545,7 @@
             return waiters.length;
           },
           resetSwiWasmActorWorkers: function() {
-            this.closeSwiWasmPromiseContext();
+            this.closeSwiWasmClientContext();
             Object.keys(this.swiWasmActorWorkers || {}).forEach(function(pid) {
               var entry = this.swiWasmActorWorkers[pid];
               this.disposeSwiWasmPromiseRequest(pid);
@@ -2733,7 +2755,8 @@
               "           (Pid == statechart -> (statechart_wasm:statechart_running -> ChartLive=true ; ChartLive=false) ; ChartLive=true),",
               "           Publication := swiWasmNamePublish(#Token, #NameText, #PidText, #ChartLive),",
               "           browser_name_await(Publication, Published),",
-              "           (Published == \"published\" -> Committed := swiWasmNameCommit(#Token, #NameText),",
+              "           (Published == \"published\" -> CommitRequest := swiWasmNameCommit(#Token, #NameText),",
+              "              browser_name_await(CommitRequest, Committed),",
               "              (Committed == true -> nb_setarg(1, Guard, committed) ; browser_name_error(Committed,Name,PI))",
               "           ; browser_name_error(Published,Name,PI)) ),",
               "         ( (arg(1,Guard,open),arg(2,Guard,statechart) -> catch((statechart_wasm:statechart_stop,_:=swiWasmNamedChartStopped()),_,true) ; true),",
@@ -4771,6 +4794,7 @@
             swiWasmActorMainMailbox: [],
             swiWasmActorMainWaiters: [],
             swiWasmActorNames: {},
+            swiWasmClientContextClosed: false,
             swiWasmActorServices: {},
             swiWasmActorMonitors: [],
             swiWasmActorDelayedSends: {},
@@ -5079,6 +5103,7 @@
     node.dispose = function () {
       if (host.disposed()) return;
       ready = false;
+      node.closeSwiWasmClientContext();
       if (running) Promise.resolve(interrupt('abort')).catch(function () {});
       // Keep ownership until startup and any suspended search have unwound.
       // A replacement main session waits for this barrier before installing globals.
@@ -5425,6 +5450,7 @@
     node.dispose = function () {
       if (disposed) return;
       disposed = true;
+      node.closeSwiWasmClientContext();
       settle(null, new Error('Browser node disposed'));
       inputWaiters.splice(0).forEach(function (resolve) {
         resolve(null);
