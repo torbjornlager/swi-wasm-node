@@ -1,0 +1,81 @@
+{
+  "suite": "receive-control-0.1",
+  "scope": "supporting",
+  "minimum_profile": "actor",
+  "contract": "Real controls after a held RPC confirms guard entry; retained actors preserve original mailbox order/sharing after abort/time limit, termination is confirmed by monitor while the peer is held. Browser main direct abort is tested on the main engine; configured PTCP time limits and child termination use worker actors under both coordinators.",
+  "probe_goal": "self(S),S!rg_before,S!rg_target(pair(V,V)),S!rg_after,receive({rg_target(pair(X,Y)) if (X=tentative,GuardBinding=dirty,rpc(LibraryEntryURI,true,[http_timeout(15)]))->throw(guard_body_selected)},[timeout(12),on_timeout(throw(control_missing))])",
+  "recovery_goal": "receive({M1->M1==rg_before},[timeout(0),on_timeout(throw(missing_before))]),receive({rg_target(pair(A,B))->var(A),A==B},[timeout(0),on_timeout(throw(missing_target))]),receive({M3->M3==rg_after},[timeout(0),on_timeout(throw(missing_after))]),receive({_ ->throw(duplicate_message)},[timeout(0)]),GuardRecovered=passed",
+  "ordinary_goal": "self(S),S!rg_before,S!rg_target(pair(V,V)),S!rg_after,receive({rg_target(pair(X,Y)) if (X=tentative,GuardBinding=dirty,rpc(LibraryEntryURI,true,[http_timeout(15)]))->throw(ordinary_guard_selected)},[timeout(0),on_timeout(GuardOutcome=nonmatch)]),GuardOutcome==nonmatch,var(X),var(Y),var(GuardBinding),(receive({M1->M1==rg_before},[timeout(0),on_timeout(throw(missing_before))]),receive({rg_target(pair(A,B))->var(A),A==B},[timeout(0),on_timeout(throw(missing_target))]),receive({M3->M3==rg_after},[timeout(0),on_timeout(throw(missing_after))]),receive({_ ->throw(duplicate_message)},[timeout(0)]),GuardRecovered=passed)",
+  "cases": [
+    {
+      "id": "RG-001",
+      "title": "Abort propagates through an entered guard and retains the original mailbox",
+      "control": "abort",
+      "requirements": [
+        "B-104"
+      ]
+    },
+    {
+      "id": "RG-002",
+      "title": "Configured execution limit propagates through an entered guard with the formal time error and retained mailbox",
+      "control": "time_limit",
+      "time_limit": 0.6,
+      "requirements": [
+        "B-104"
+      ]
+    },
+    {
+      "id": "RG-003",
+      "title": "Actor termination proceeds through an entered guard without releasing its RPC",
+      "control": "terminate",
+      "requirements": [
+        "B-104"
+      ]
+    },
+    {
+      "id": "RG-004",
+      "title": "Ordinary RPC error is a guard non-match with all tentative bindings and mailbox changes rolled back",
+      "control": "ordinary_error",
+      "requirements": [
+        "B-104"
+      ]
+    },
+    {
+      "id": "RG-005",
+      "title": "Private source: Abort propagates through an entered guard and retains the original mailbox",
+      "control": "abort",
+      "requirements": [
+        "B-104"
+      ],
+      "source": "guard_private_marker(ok). guard_private_body(ok).\n"
+    },
+    {
+      "id": "RG-006",
+      "title": "Private source: Configured execution limit propagates through an entered guard with the formal time error and retained mailbox",
+      "control": "time_limit",
+      "time_limit": 0.6,
+      "requirements": [
+        "B-104"
+      ],
+      "source": "guard_private_marker(ok). guard_private_body(ok).\n"
+    },
+    {
+      "id": "RG-007",
+      "title": "Private source: Actor termination proceeds through an entered guard without releasing its RPC",
+      "control": "terminate",
+      "requirements": [
+        "B-104"
+      ],
+      "source": "guard_private_marker(ok). guard_private_body(ok).\n"
+    },
+    {
+      "id": "RG-008",
+      "title": "Private source: Ordinary RPC error is a guard non-match with all tentative bindings and mailbox changes rolled back",
+      "control": "ordinary_error",
+      "requirements": [
+        "B-104"
+      ],
+      "source": "guard_private_marker(ok). guard_private_body(ok).\n"
+    }
+  ]
+}
