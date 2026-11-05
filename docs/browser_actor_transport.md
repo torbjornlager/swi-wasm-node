@@ -107,9 +107,18 @@ down(Pid, Ref, Reason)
 ```
 
 Socket closure rejects pending requests and delivers
-`down(Pid, Ref, connection_lost(URL))` for monitors associated with that
+`down(Pid, Ref, connection_closed)` for monitors associated with that
 connection. Automatic reconnect, monitor restoration after reconnect, and
 cross-connection naming/service recovery are not part of version 1.
+
+The browser coordinator owns the observation filter. Successful `demonitor/2`
+withdraws that filter before replying to the caller or applying `flush`, so
+late peer notifications cannot recreate it. Peer bookkeeping uses the existing
+connection and does not reopen a socket. If coordinator withdrawal cannot be
+confirmed within two seconds, the call raises
+`error(remote_demonitor_timeout(Pid), Context)`, preserves the monitor for retry
+and leaves queued notifications untouched. A delayed timed-out withdrawal is
+cancelled. After declared connection loss, local withdrawal suffices.
 
 ## Compatibility
 

@@ -744,7 +744,7 @@
               return Promise.resolve(self.monitorSwiWasmActor("main", pidText, refText));
             };
             window.swiWasmActorDemonitor = function(refText) {
-              return Promise.resolve(self.demonitorSwiWasmActor("main", refText));
+              return self.demonitorSwiWasmActorConfirmed("main", refText);
             };
             window.swiWasmServerMonitorCleanup = function(refText) {
               self.cleanupSwiWasmServerMonitor("main", refText);
@@ -1600,7 +1600,7 @@
                 self.invalidateSwiWasmRemoteNames(node,undefined,"connection_closed");
                 var error = new Error("remote actor connection closed: " + node);
                 while (entry.pendingSpawns.length) entry.pendingSpawns.shift().reject(error);
-                var lostReason = "connection_lost('" + node.replace(/'/g, "''") + "')";
+                var lostReason = "connection_closed";
                 var lostMonitors = self.swiWasmActorMonitors.filter(function(monitor) {
                   var remote = self.parseSwiWasmRemoteToplevelPid(monitor.pid) || self.parseSwiWasmRemoteActorPid(monitor.pid);
                   return remote && remote.node === node;
@@ -2120,7 +2120,7 @@
                 result = this.monitorSwiWasmActor(pid, message.target, message.ref);
                 break;
               case "demonitor":
-                result = this.demonitorSwiWasmActor(pid, message.ref);
+                result = this.demonitorSwiWasmActorConfirmed(pid, message.ref);
                 break;
               case "exit":
                 result = this.exitSwiWasmActor(message.pid || pid, message.reason || "true");
@@ -2389,24 +2389,41 @@
             this.swiWasmActorMonitors.push({ watcher: watcher, pid: pid, ref: ref });
             return true;
           },
-          demonitorSwiWasmActor: function(watcherText, refText) {
-            var watcher = this.resolveSwiWasmActorTarget(watcherText);
-            var ref = String(refText || "");
-            var removed = false;
-            var remoteMonitor = null;
-            this.swiWasmActorMonitors = this.swiWasmActorMonitors.filter(function(monitor) {
-              var keep = !(monitor.watcher === watcher && monitor.ref === ref);
-              if (!keep) {
-                removed = true;
-                remoteMonitor = this.parseSwiWasmRemoteToplevelPid(monitor.pid) || this.parseSwiWasmRemoteActorPid(monitor.pid);
+          demonitorSwiWasmActorConfirmed: function(watcherText, refText) {
+            var self=this, watcher=this.resolveSwiWasmActorTarget(watcherText), ref=String(refText || "");
+            var monitor=this.swiWasmActorMonitors.find(function(m) { return m.watcher===watcher && m.ref===ref; });
+            if (!monitor || !(this.parseSwiWasmRemoteActorPid(monitor.pid) || this.parseSwiWasmRemoteToplevelPid(monitor.pid)))
+              return Promise.resolve(this.demonitorSwiWasmActor(watcherText,refText));
+            var operation={cancelled:false};
+            return new Promise(function(resolve) {
+              var settled=false;
+              function finish(value) { if(settled)return;settled=true;clearTimeout(timer);resolve(value); }
+              function unavailable() {
+                operation.cancelled=true;
+                // A down/loss event may already have discharged this reference.
+                finish(self.swiWasmActorMonitors.indexOf(monitor)<0 ? true : "remote_demonitor_timeout("+monitor.pid+")");
               }
-              return keep;
-            }.bind(this));
-            if (!remoteMonitor) return Promise.resolve(removed);
-            return this.ensureSwiWasmRemoteActorConnection(remoteMonitor.node).then(function(entry) {
-              entry.socket.send(JSON.stringify({ command: "demonitor", ref: ref }));
-              return true;
+              var timer=setTimeout(unavailable,2000);
+              Promise.resolve().then(function() { return self.demonitorSwiWasmActor(watcherText,refText,operation); }).then(finish,unavailable);
             });
+          },
+          demonitorSwiWasmActor: function(watcherText, refText, operation) {
+            if (operation && operation.cancelled) return Promise.resolve(false);
+            var watcher=this.resolveSwiWasmActorTarget(watcherText),ref=String(refText || "");
+            var removed=this.swiWasmActorMonitors.filter(function(m) { return m.watcher===watcher && m.ref===ref; });
+            // This coordinator owns the observation filter. Withdrawal and down
+            // routing share its event loop; the ordered Worker reply is the barrier.
+            this.swiWasmActorMonitors=this.swiWasmActorMonitors.filter(function(m) { return removed.indexOf(m)<0; });
+            removed.forEach(function(m) {
+              var remote=this.parseSwiWasmRemoteActorPid(m.pid)||this.parseSwiWasmRemoteToplevelPid(m.pid);
+              var entry=remote && this.swiWasmRemoteActorConnections[remote.node];
+              // Peer bookkeeping is best effort; never reopen a connection to
+              // remove an observation filter that is already gone locally.
+              if(entry && entry.socket && entry.socket.readyState===WebSocket.OPEN) {
+                try { entry.socket.send(JSON.stringify({command:"demonitor",ref:ref})); } catch (_) {}
+              }
+            }.bind(this));
+            return Promise.resolve(removed.length>0);
           },
           cleanupSwiWasmServerMonitor: function(watcherText, refText) {
             // Local removal happens synchronously. Do not await remote transport
@@ -2808,6 +2825,9 @@
               "    nonvar(Message), Message = '$call'(Goal0,Options),",
               "    nonvar(Pid), Pid = _@Node, Node \\== localhost, !, strip_module(Goal0,_,Goal).",
               "browser_outgoing_message(_, Message, Message).",
+              "browser_demonitor_result(Status) :-",
+              "    ( string(Status), catch(wire_read(Status,remote_demonitor_timeout(Pid)),_,fail)",
+              "    -> throw(error(remote_demonitor_timeout(Pid),demonitor/2)) ; true ).",
               "browser_name_error(Status, Name, PI) :-",
               "    ( memberchk(Status, [connection_closed,terminated]) -> throw(error(remote_spawn_failed(Status),PI))",
               "    ; string(Status), memberchk(Status, [\"connection_closed\",\"terminated\"]) -> atom_string(Reason,Status), throw(error(remote_spawn_failed(Reason),PI))",
@@ -3765,7 +3785,7 @@
               "demonitor(Ref, Options) :-",
               "    term_string(Ref, RefText),",
               "    Promise := swiWasmActorDemonitor(#RefText),",
-              "    await(Promise, _),",
+              "    await(Promise, Status), browser_demonitor_result(Status),",
               "    (   member(flush, Options)",
               "    ->  flush_down(Ref)",
               "    ;   true",

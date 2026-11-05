@@ -134,7 +134,8 @@ function serverMonitorCoordinator(deliverMessage) {
     swiWasmActorPidLive: () => true,
     parseSwiWasmRemoteActorPid: () => null,
     parseSwiWasmRemoteToplevelPid: () => null,
-    monitorSwiWasmActor: workbenchMethod("monitorSwiWasmActor", "demonitorSwiWasmActor"),
+    monitorSwiWasmActor: workbenchMethod("monitorSwiWasmActor", "demonitorSwiWasmActorConfirmed"),
+    demonitorSwiWasmActorConfirmed: workbenchMethod("demonitorSwiWasmActorConfirmed", "demonitorSwiWasmActor"),
     demonitorSwiWasmActor: workbenchMethod("demonitorSwiWasmActor", "cleanupSwiWasmServerMonitor"),
     cleanupSwiWasmServerMonitor: workbenchMethod("cleanupSwiWasmServerMonitor", "notifySwiWasmActorMonitors"),
     sendSwiWasmActorMessage(watcher, text) { deliverMessage(text); return true; }
@@ -927,7 +928,7 @@ async function remoteSynchronousContract(run,host,check) {
     state.sync=true;
     check(await run("toplevel_spawn(P,[node('"+node+"'),session(true)]),retractall(user:remote_sync_pid(_)),assertz(user:remote_sync_pid(P))"),"replacement remote fixture starts");
     state.answers=[{close:true}];
-    check(await run("user:remote_sync_pid(P),catch((toplevel_call_synch(P,true,_),fail),toplevel_down(connection_lost('"+node+"')),true),user:remote_other(Other,OtherRef),Other!stop,receive({down(Other,OtherRef,true)->true})"),"connection loss interrupts synchronous wait and preserves unrelated monitor");
+    check(await run("user:remote_sync_pid(P),catch((toplevel_call_synch(P,true,_),fail),toplevel_down(connection_closed),true),user:remote_other(Other,OtherRef),Other!stop,receive({down(Other,OtherRef,true)->true})"),"connection loss interrupts synchronous wait and preserves unrelated monitor");
     check(host.swiWasmActorMonitors.length===0,"all synchronous waits remove their private monitors");
     state.sync=true;
     check(await run("toplevel_spawn(P,[node('"+node+"'),session(true)]),retractall(user:remote_sync_pid(_)),assertz(user:remote_sync_pid(P))"),"remote interruption fixture starts");
@@ -962,7 +963,7 @@ async function remoteAliasCleanupContract(run,host,check) {
     check(!Object.hasOwn(host.swiWasmActorNames,"unmonitored_alias")&&host.swiWasmActorMonitors.some(m=>m.pid===spare),"unmatched down cleans exact alias without consuming another pid's monitor");
     socket.close();
     check(notifications.at(-1).primary===undefined&&notifications.at(-1).spare===undefined,"connection cleanup precedes connection-loss notification");
-    check(await run("user:alias_fixture(P,S,Q,L,RP,RQ,RL),user:alias_spare_ref(RS),receive({down(S,RS,connection_lost(_))->whereis(primary,undefined)}),whereis(other_kept,Q),whereis(local_kept,L),whereis_service(service_kept,P),unregister(other_kept),register(primary,Q),whereis(primary,Q)"),"connection loss clears its node and preserves local names, other nodes and services");
+    check(await run("user:alias_fixture(P,S,Q,L,RP,RQ,RL),user:alias_spare_ref(RS),receive({down(S,RS,connection_closed)->whereis(primary,undefined)}),whereis(other_kept,Q),whereis(local_kept,L),whereis_service(service_kept,P),unregister(other_kept),register(primary,Q),whereis(primary,Q)"),"connection loss clears its node and preserves local names, other nodes and services");
     check(host.swiWasmActorMonitors.length===2&&host.swiWasmActorMonitors.some(m=>m.pid===q),"other-node and local explicit monitors survive connection loss");
     check(await run("user:alias_fixture(_,_,Q,L,_,RQ,RL),exit(Q,kill),receive({down(Q,RQ,kill)->true}),whereis(primary,undefined),L!stop,receive({down(L,RL,true)->true}),unregister_service(service_kept)"),"reused other-node name cleans on its own event and unrelated local monitor still delivers");
     check(host.swiWasmActorMonitors.length===0&&Object.keys(host.swiWasmActorNames).length===0,"alias cleanup tests leave no ordinary names or monitors");

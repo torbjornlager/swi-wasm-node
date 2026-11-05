@@ -1973,7 +1973,7 @@ function createSwiWasmPromiseStore(options) {
       "demonitor(Ref, Options) :-",
       "    term_string(Ref, RefText),",
       "    Promise := actorDemonitor(#RefText),",
-      "    actor_await(Promise, _),",
+      "    actor_await(Promise, Status), browser_demonitor_result(Status),",
       "    (   member(flush, Options)",
       "    ->  flush_down(Ref)",
       "    ;   true",
