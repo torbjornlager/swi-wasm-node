@@ -74,10 +74,14 @@ module.exports=async function promiseContexts(browser,base) {
             await run(make('remote_failure')+'R=2345678901,yield(R,failure)','same numeric reference in another context designates only its own answer',other);other.makeBrowserPromiseRef=otherMint;
             await run('foreign_probe(R),yield(R,success([v(ok)],false))','foreign cleanup leaves owner answer intact');
             // Context closure cancels transport and wakes pending collectors.
-            const ref=context.create(()=>({promise:new Promise(()=>{}),cancel:()=>{window.contextCancelled=true;}}));
+            let completeAfterClose;
+            const ref=context.create(()=>({promise:new Promise(resolve=>{completeAfterClose=resolve;}),cancel:()=>{window.contextCancelled=true;}}));
             const token=context.claim(ref,'closing-probe'),wait=context.wait(ref,token,-1);
             await run("self(S),spawn(receive({ping->send(S,alive)}),P,[link(false)]),assertz(context_survivor(P))","actor survives context closure control");
             n.closeSwiWasmPromiseContext();require(await wait==='missing_promise'&&window.contextCancelled&&Object.keys(context.items).length===0,'context closure retires entries, wakes waiters and cancels transport');
+            completeAfterClose('success([late],false).');
+            await Promise.resolve();
+            require(!context.items[ref]&&context.claim(ref,'late-probe')==='missing_promise','completion after context closure cannot republish a reference');
             await run('context_survivor(P),send(P,ping),receive({alive->true},[timeout(2),on_timeout(throw(no_survivor))])','closing promise context does not terminate surviving actors');
             let denied=false;try{context.create(()=>({promise:Promise.resolve('late')}));}catch(e){denied=/context closed/.test(e.message);}
             require(denied,'closed context refuses new promise admission');
