@@ -57,6 +57,8 @@ def main():
             rows.append(run('selective-receive-browser',[node,'tests/wasm/swi_wasm_receive_browser.cjs'],env,root,a.report))
             env['LIBRARY_REPORT']=str(a.report/'receive-controls-browser.json')
             rows.append(run('receive-controls-browser',[node,'tests/wasm/swi_wasm_receive_controls_browser.cjs'],env,root,a.report))
+            env['LIBRARY_REPORT']=str(a.report/'node-settings-browser.json')
+            rows.append(run('node-settings-browser',[node,'tests/wasm/swi_wasm_node_settings_browser.cjs'],env,root,a.report))
             (a.report/'results.json').write_text(json.dumps(dict(source=manifest['source'],native_integration=bool(a.native_root),host_integration=bool(env.get('SWI_WASM_TEST_HOST')),runs=rows),indent=2)+'\n')
         finally:server.shutdown();server.server_close();thread.join()
     verify(root)

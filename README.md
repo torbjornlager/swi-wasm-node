@@ -11,6 +11,12 @@ The packaged default database is empty; tutorial data is only a test fixture.
 The session API supports Worker execution (the default) and main-thread
 execution with DOM access. The main engine retains its page-global bridge.
 
+`node_setting/2` reports the available browser-host settings, `profile(actor)`
+and `sandbox(off)`. Unknown or unavailable keys fail. URI, authentication and
+HTTP admission settings are unavailable in these execution hosts. See the
+[runtime reference](docs/runtime.md#runtime-capabilities) for the distinction
+between goal policy, browser confinement and remote-node policy.
+
 ## Build and test
 
 ```sh

@@ -1,0 +1,69 @@
+{
+  "suite": "node-settings-0.1",
+  "baseline": "node-settings-0.1",
+  "status": "draft",
+  "scope": "required",
+  "source": "",
+  "cases": [
+    {
+      "id": "NS-001",
+      "title": "Enumerates a nonempty finite relation of ground settings",
+      "transport": "query",
+      "goal": "findall(K-V,node_setting(K,V),Pairs),Pairs=[_|_],ground(Pairs),findall(K,node_setting(K,_),Keys),sort(Keys,Unique),length(Keys,N),length(Unique,N)"
+    },
+    {
+      "id": "NS-002",
+      "title": "Bound lookup agrees with enumeration without duplicate answers",
+      "transport": "query",
+      "goal": "findall(K-V,node_setting(K,V),Pairs),Pairs=[_|_],findall(K-V,(member(K-V,Pairs),findall(W,node_setting(K,W),Values),Values=[V]),Roundtrip),Roundtrip==Pairs"
+    },
+    {
+      "id": "NS-003",
+      "title": "Value-bound lookup agrees with enumeration",
+      "transport": "query",
+      "goal": "node_setting(profile,Profile),findall(K,node_setting(K,Profile),Keys),findall(K,(node_setting(K,V),V==Profile),Expected),Keys==Expected"
+    },
+    {
+      "id": "NS-004",
+      "title": "Unknown and structurally invalid keys fail without binding values",
+      "transport": "query",
+      "goal": "\\+node_setting(ns_unknown_setting,V),var(V),\\+node_setting(42,V),\\+node_setting([],V),\\+node_setting(setting(_),V),var(V)"
+    },
+    {
+      "id": "NS-005",
+      "title": "Private settings and credentials are unavailable",
+      "transport": "query",
+      "goal": "findall(K,(member(K,[shared_db_source,shared_db_module,principal_policies,dev_principal,dev_capabilities,bearer_token,bearer_tokens,peer_transport_tokens,authenticated_default_capabilities]),node_setting(K,_)),Leaked),Leaked==[]"
+    },
+    {
+      "id": "NS-006",
+      "title": "Enumeration exposes only Appendix B public keys",
+      "transport": "query",
+      "goal": "findall(K,(node_setting(K,_),\\+member(K,[url,profile,sandbox,auth,timeout,rate_window_seconds,max_inflight_calls,max_term_text_bytes,max_call_requests_per_window,max_load_text_bytes,load_uri_allowed_origins,max_sessions_per_principal,max_session_spawns_per_window,max_ws_actors_per_principal,max_ws_frame_bytes,max_ws_commands_per_window])),Extra),Extra==[],node_setting(profile,_)"
+    },
+    {
+      "id": "NS-007",
+      "title": "Repeated reads and failed matches leave settings unchanged",
+      "transport": "query",
+      "goal": "findall(K-V,node_setting(K,V),Before),Before=[_|_],\\+node_setting(profile,ns_impossible_profile),\\+node_setting(ns_unknown_setting,_),findall(K-V,node_setting(K,V),After),After==Before"
+    },
+    {
+      "id": "NS-008",
+      "title": "Profile is a single public profile atom",
+      "transport": "query",
+      "goal": "findall(P,node_setting(profile,P),Profiles),Profiles=[Profile],member(Profile,[relation,isobase,isotope,actor])"
+    },
+    {
+      "id": "NS-009",
+      "title": "Unavailable API families do not expose settings",
+      "transport": "query",
+      "goal": "node_setting(profile,Profile),(member(Profile,[relation,isobase])-> \\+node_setting(max_sessions_per_principal,_),\\+node_setting(max_session_spawns_per_window,_);true),(Profile\\==actor-> \\+node_setting(max_ws_actors_per_principal,_),\\+node_setting(max_ws_frame_bytes,_),\\+node_setting(max_ws_commands_per_window,_);true)"
+    },
+    {
+      "id": "NS-010",
+      "title": "Bound values filter the current relation and mismatched representations fail",
+      "transport": "query",
+      "goal": "findall(K-V,node_setting(K,V),Pairs),Pairs=[_|_],findall(K-V,(member(K-V,Pairs),node_setting(K,V)),Matching),Matching==Pairs,\\+node_setting(_,ns_never_current_value),\\+node_setting(load_uri_allowed_origins,ns_not_a_list)"
+    }
+  ]
+}

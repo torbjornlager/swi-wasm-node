@@ -1,0 +1,61 @@
+{
+  "suite": "browser-node-settings-host-0.1",
+  "cases": [
+    {
+      "id": "BS-001",
+      "title": "Exact settings describe the browser execution host",
+      "transport": "query",
+      "goal": "findall(K-V,node_setting(K,V),Pairs),sort(Pairs,[profile-actor,sandbox-off])",
+      "source": ""
+    },
+    {
+      "id": "BS-002",
+      "title": "Private source helpers read the execution-host settings",
+      "transport": "query",
+      "goal": "findall(K-V,ns_read(K,V),Pairs),sort(Pairs,[profile-actor,sandbox-off])",
+      "source": "ns_read(K,V):-node_setting(K,V)."
+    },
+    {
+      "id": "BS-003",
+      "title": "A source-loaded child reads its host settings",
+      "transport": "query",
+      "goal": "self(Me),spawn(ns_report(Me),P,[src_text('ns_report(To):-findall(K-V,node_setting(K,V),Pairs),To!bs_settings(Pairs).'),monitor(true)]),receive({bs_settings(Actual)->sort(Actual,[profile-actor,sandbox-off])},[timeout(3),on_timeout(throw(settings_child_missing))]),receive({down(P,_,true)->true},[timeout(3),on_timeout(throw(settings_child_down_missing))])",
+      "source": ""
+    },
+    {
+      "id": "BS-004",
+      "title": "Copied private helpers resolve the child host predicate",
+      "transport": "query",
+      "goal": "self(Me),spawn((findall(K-V,ns_read(K,V),Pairs),Me!bs_settings(Pairs)),P,[src_predicates([ns_read/2]),monitor(true)]),receive({bs_settings(Actual)->sort(Actual,[profile-actor,sandbox-off])},[timeout(3)]),receive({down(P,_,true)->true},[timeout(3)])",
+      "source": "ns_read(K,V):-node_setting(K,V)."
+    },
+    {
+      "id": "BS-005",
+      "title": "A nested retained session exposes settings through its private helper",
+      "transport": "query",
+      "goal": "toplevel_spawn(T,[session(true),src_text('ns_read(K,V):-node_setting(K,V).')]),toplevel_call_synch(T,findall(K-V,ns_read(K,V),Pairs),Reply,[template(Pairs),timeout(3)]),Reply=success(T,[Observed],false),sort(Observed,[profile-actor,sandbox-off]),toplevel_halt(T)",
+      "source": ""
+    },
+    {
+      "id": "BS-006",
+      "title": "Receive guards and bodies retain private helper access",
+      "transport": "query",
+      "goal": "self(Me),Me!bs_probe,receive({bs_probe if ns_read(profile,actor)->ns_read(sandbox,Value)},[timeout(1)]),Value==off",
+      "source": "ns_read(K,V):-node_setting(K,V)."
+    },
+    {
+      "id": "BS-007",
+      "title": "HTTP and admission settings are unavailable rather than invented",
+      "transport": "query",
+      "goal": "findall(K,(member(K,[url,auth,timeout,rate_window_seconds,max_inflight_calls,max_term_text_bytes,max_call_requests_per_window,max_load_text_bytes,load_uri_allowed_origins,max_sessions_per_principal,max_session_spawns_per_window,max_ws_actors_per_principal,max_ws_frame_bytes,max_ws_commands_per_window]),node_setting(K,_)),[]),node_setting(profile,actor),node_setting(sandbox,off)",
+      "source": ""
+    },
+    {
+      "id": "BS-008",
+      "title": "Bound values and reverse lookup preserve the two-setting relation",
+      "transport": "query",
+      "goal": "findall(K,node_setting(K,actor),[profile]),findall(K,node_setting(K,off),[sandbox]),\\+node_setting(profile,isobase),\\+node_setting(sandbox,whitelist),findall(K-V,node_setting(K,V),Pairs),sort(Pairs,[profile-actor,sandbox-off])",
+      "source": ""
+    }
+  ]
+}

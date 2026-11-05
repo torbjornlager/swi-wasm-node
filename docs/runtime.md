@@ -280,3 +280,17 @@ Worker actors report `actor_isolation(independent)` and the main engine reports
 meanings. Unknown properties, including implementation identity, fail normally.
 Private engine-mode dispatch preserves naming and statechart startup behavior;
 diagnostic tools and package provenance identify the implementation.
+
+`node_setting/2` enumerates the host's available public settings:
+`profile(actor)` and `sandbox(off)`. Both execution modes expose the ACTOR API
+without a Prolog goal-filtering policy. The sandbox key describes that policy;
+browser/WASM confinement and remote-node access policies apply separately.
+
+Unknown, private and unavailable keys fail, including URI, authentication,
+timeout, rate and admission-limit settings. Asset URLs, source URLs and remote
+RPC destinations are independent of this execution host and supply no node
+URL. The host has no configured HTTP admission ceilings to report. Repeated
+reads and failed value matches leave the relation unchanged. The predicate is
+available in ordinary queries, private helpers, copied child programs, nested
+sessions and receive callbacks. The packaged node-setting browser tests check
+these contexts in real Chrome with both execution modes.
