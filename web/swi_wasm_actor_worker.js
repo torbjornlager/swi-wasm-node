@@ -390,7 +390,7 @@ function createSwiWasmPromiseStore(options) {
 
   function actorRequest(action, fields) {
     var id = "worker_request(" + (nextRequestId++) + ")";
-    return new Promise(function(resolve, reject) {
+    var promise = new Promise(function(resolve, reject) {
       // Without a timeout a lost coordinator reply would wedge the actor
       // (the Prolog await/2 never returns); reject so it surfaces as an
       // ordinary error instead.
@@ -411,6 +411,10 @@ function createSwiWasmPromiseStore(options) {
       };
       post("request", Object.assign({}, fields || {}, { id: id, action: action }));
     });
+    // A heartbeat can yield between creating this promise and actor_await/2.
+    // Own early rejection now; the original promise still rejects when awaited.
+    promise.catch(function() {});
+    return promise;
   }
 
   function actorMakeRef() {
@@ -1226,14 +1230,20 @@ function createSwiWasmPromiseStore(options) {
       "    supervisor_spawn/2, supervisor_spawn/3, supervisor_spawn_child/3,",
       "    supervisor_terminate_child/3, supervisor_delete_child/3, supervisor_respawn_child/3,",
       "    supervisor_which_children/2, supervisor_count_children/2, supervisor_halt/1, supervisor_stop/1,",
-      "    parallel/1, first_solution/2, first_solution/3,",
+      "    parallel/1, first_solution/2, first_solution/3, sleep/1,",
       "    rpc/2, rpc/3, promise/3, promise/4, promise_cleanup/1, yield/2, yield/3, runtime_property/1, node_setting/2",
       "]).",
-      ":- use_module(library(wasm)).",
+      ":- use_module(library(wasm), except([sleep/1])).",
       ":- use_module(library(apply)).",
       ":- use_module(library(error)).",
       ":- use_module(library(lists)).",
       ":- use_module(library(option)).",
+      "% Replace the engine's pre-imported sleep with the validated language API.",
+      ":- (predicate_property(user:sleep(_), imported_from(wasm)) -> abolish(user:sleep/1) ; true).",
+      "sleep(Seconds) :-",
+      "    must_be(number, Seconds),",
+      "    (Seconds >= 0 -> true ; domain_error(not_less_than_zero, Seconds)),",
+      "    wasm:sleep(Seconds).",
       ":- op(800, xfx, !).",
       ":- op(200, xfx, @).",
       ":- op(1000, xfy, if).",
@@ -1591,7 +1601,7 @@ function createSwiWasmPromiseStore(options) {
       "    findall(Text, (member(Option,Options), ordered_spawn_source_option(Option,Options,Text)), Texts),",
       "    atomic_list_concat(Texts, '\\n', Source).",
       "",
-      "ordered_spawn_source_option(Option, Options, Text) :-",
+      "ordered_spawn_source_option(Option, _Options, Text) :-",
       "    canonical_source_option(Option, src_text(Text)).",
       "ordered_spawn_source_option(Option, Options, Text) :-",
       "    canonical_source_option(Option, src_list(Terms)),",
@@ -1610,7 +1620,7 @@ function createSwiWasmPromiseStore(options) {
       "    atomic_list_concat(ClauseTexts, '\\n', Raw), browser_materialized_source(Options,Raw,Text).",
       "",
       "% Each source is materialised at its position in the caller option list.",
-      "ordered_spawn_source_option(Option, Options, Text) :-",
+      "ordered_spawn_source_option(Option, _Options, Text) :-",
       "    canonical_source_option(Option, src_uri(URI0)), browser_uri_atom(URI0, URI),",
       "    term_string(URI, URIText),",
       "    Promise := actorLoadUri(#URIText),",

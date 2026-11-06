@@ -83,6 +83,30 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
     assert.equal(Object.keys(node.swiWasmActorWorkers).length,0);
     assert.throws(()=>node.open(),/disposed/);
   } finally {node.dispose();}
+  const parallelEvents=[];
+  const parallelNode=create({onEvent:e=>parallelEvents.push(e)});
+  try {
+    await parallelNode.open({source:fs.readFileSync(path.join(ROOT,'tests/fixtures/parallel-tutorial.pl'),'utf8')});
+    for(const [goal,error] of [
+      ['sleep(a)','type_error(number,a)'],
+      ['sleep(_)','instantiation_error'],
+      ['sleep(-1)','domain_error(not_less_than_zero,-1)']
+    ]) {
+      const result=await parallelNode.query(goal);
+      assert.equal(result.type,'error',JSON.stringify(result));
+      assert.ok(JSON.stringify(result).includes(error),JSON.stringify(result));
+      assert.equal((await parallelNode.query('true')).type,'success');
+    }
+    assert.equal((await parallelNode.query('sleep(0),sleep(0.001)')).type,'success');
+    const result=await parallelNode.query('time(myparallel([(X=a,sleep(1)),(Y=b,sleep(a)),(Z=c,sleep(2))]))');
+    assert.equal(result.type,'error',JSON.stringify(result));
+    assert.ok(JSON.stringify(result).includes('type_error(number,a)'),JSON.stringify(result));
+    const live=()=>Object.values(parallelNode.swiWasmActorWorkers).filter(entry=>!entry.done);
+    for(let i=0;i<100&&live().length!==1;i++)await wait(10);
+    assert.equal(live().length,1,'tutorial cleans up its children');
+    assert.equal((await parallelNode.query('true')).type,'success');
+    assert.ok(!JSON.stringify(parallelEvents).includes('Singleton variables'),'bridge loads without singleton warnings');
+  } finally {parallelNode.dispose();}
   const withDatabase=create({sharedDatabaseUrl:'http://runtime.invalid/host/shared.pl'});
   try {
     await withDatabase.open();

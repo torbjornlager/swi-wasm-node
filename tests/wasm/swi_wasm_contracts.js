@@ -1504,6 +1504,33 @@ async function portableWorker(W,check) {
 }
 
 const scenarios = {
+  async early_request_rejection(W,check) {
+    const unhandled=[];
+    const observe=error=>unhandled.push(error);
+    process.on('unhandledRejection',observe);
+    try {
+      W.control.request=m=>W.S.onmessage({data:{command:'reply',id:m.id,ok:false,error:'original_request_error'}});
+      const pending=W.S.actorMakeRef();
+      await sleep(0); // Prolog can yield a heartbeat before entering actor_await/2.
+      check(unhandled.length===0,'coordinator rejection is owned before Prolog begins awaiting');
+      let error;
+      try {await W.S.actorAwait(pending);}catch(e){error=e;}
+      check(error&&error.message==='original_request_error','delayed await still receives the original rejection');
+    } finally {process.off('unhandledRejection',observe);}
+  },
+  async sleep_validation_main(W,check) {
+    const source=Function(runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0]).call({swiWasmBehaviourProlog:()=>behaviourSource});
+    const engine=await require(path.join(ROOT,'web/swipl-bundle.js'))({arguments:['-q','--nosignals']});
+    await workbenchMethod('installSwiWasmSharedDatabase','swiWasmBehaviourProlog').call({swiWasmRpcProlog:()=>source},engine.prolog,engine);
+    for(const [goal,error] of [['sleep(a)','type_error(number,a)'],['sleep(_)','instantiation_error'],['sleep(-1)','domain_error(not_less_than_zero,-1)']]) {
+      let count=0;
+      await engine.prolog.forEach('catch(('+goal+'),E,true),nonvar(E),E=error('+error+',_)',()=>count++);
+      check(count===1,'Prolog validation before JavaScript: '+goal);
+    }
+    let count=0;
+    await engine.prolog.forEach('sleep(0),sleep(0.001)',()=>count++);
+    check(count===1,'zero and fractional waits still yield successfully');
+  },
   compatibility_output_ordering: mainOutputOrdering,
   portable_text_worker: portableWorker,
   portable_text_main: portableMain,
