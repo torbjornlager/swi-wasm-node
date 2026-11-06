@@ -2201,6 +2201,12 @@ const scenarios = {
     }
     check(await run("statechart_start(text('<statechart version=\"0.2\" initial=\"f\"><final id=\"f\"><onentry>fail</onentry></final></statechart>')),\\+statechart_running,statechart_in(f),statechart_wasm:internal_queue([error(failure(fail))]),statechart_stop"),"top-level final completion does not wait to handle its queued entry error");
   },
+  async statechart_example_13(W,check) { await statechartExampleContract(W,check,'13 spawn-actor.xml',['Received Pong']); },
+  async statechart_example_14(W,check) { await statechartExampleContract(W,check,'14 spawn-toplevel.xml',['[q(a)]','[q(b)]','[q(c)]','[q(d)]']); },
+  async statechart_example_15(W,check) { await statechartExampleContract(W,check,'15 spawn-server.xml',['reply(1)']); },
+  async statechart_example_16(W,check) { await statechartExampleContract(W,check,'16 spawn-supervisor.xml',['[specs-1,active-1,supervisors-0,workers-1]']); },
+  async statechart_example_17(W,check) { await statechartExampleContract(W,check,'17 spawn-statechart.xml',['nested(ok)']); },
+  async statechart_initial_invocation_failure(W,check) { await statechartStartupFailureContract(W,check); },
   async statechart_monitors_worker(W,check) { await statechartMonitorContract(W,check,false); },
   async statechart_document_worker(W,check) {
     const host=scopedWorkerCoordinator(W),fetched=[],remote=[];
@@ -3155,6 +3161,76 @@ const scenarios = {
   }
 
 };
+
+// Real example documents, engine, coordinator and child Workers. A chart may
+// await child creation during its initial macrostep, before it reports ready.
+async function statechartExampleContract(W,check,file,expected) {
+  const host=scopedWorkerCoordinator(W),output=[],events=[];
+  // These examples address their children by ordinary registered names.
+  global.localizeSwiWasmPid=host.resolveSwiWasmActorTarget;
+  host.resolveSwiWasmActorTarget=workbenchMethod('resolveSwiWasmActorTarget','swiWasmActorListText');
+  host.emitSwiWasmOutput=text=>output.push(String(text));
+  host.handleSwiWasmTrace=()=>{};
+  const handle=host.handleSwiWasmWorkerActorMessage;
+  host.handleSwiWasmWorkerActorMessage=function(pid,event) {
+    events.push({pid,...event.data});return handle.call(this,pid,event);
+  };
+  const run=statechartTestQuery(W);
+  const xml=fs.readFileSync(path.join(process.env.STATECHART_EXAMPLES_DIR||path.join(ROOT,'tests/fixtures/statechart-examples'),file),'utf8');
+  try {
+    await startToplevel(W);
+    const reply=await run("statechart_spawn(P,[src_text("+prologAtom(xml)+")]),assertz(user:example_chart(P))");
+    check(/^success\(/.test(reply),'example starts successfully: '+reply);
+    if(!/^success\(/.test(reply))return;
+    const observed=await until(()=>expected.every(text=>output.includes(text)),10000);
+    if(!observed)console.log('  diagnostic child output '+JSON.stringify(output));
+    check(observed,'expected child output: '+expected.join(', '));
+    const positions=expected.map(text=>output.indexOf(text));
+    check(positions.every((position,i)=>position>=0&&(i===0||position>positions[i-1])),'answers retain their order');
+    check(host.created.length>=2,'initial invocation constructs a real child Worker');
+    const chart=host.created[0];
+    check(events.some(e=>e.pid===chart&&e.type==='ready'),'chart reports readiness after initial invocation');
+    const ready=events.findIndex(e=>e.pid===chart&&e.type==='ready');
+    check(events.some((e,i)=>i<ready&&e.pid!==chart&&e.type==='ready'),'child readiness precedes parent readiness');
+    if(file.startsWith('13 ')) {
+      check(host.live().length===2,'ping-pong chart and child remain active');
+      check(/^success\(/.test(await run('user:example_chart(P),statechart_halt(P,stopped,2)')),'active chart halts explicitly');
+    }
+    check(await until(()=>host.live().length===0,10000),'completion or halt reclaims the chart and its children');
+    check(Object.keys(host.swiWasmActorNames).length===0,'owned child names are released');
+    check(/^success\(/.test(await run('true')),'calling session remains usable');
+  } finally {await host.stop();}
+}
+
+function prologAtom(text) {return "'"+text.replace(/\\/g,'\\\\').replace(/'/g,"''")+"'";}
+function statechartTestQuery(W) {
+  return async goal=>{
+    const replies=()=>W.sends.filter(m=>m.to===CLIENT&&/^(success|failure|error)\(/.test(m.message));
+    const before=replies().length;
+    deliver(W,"'$call'(("+goal+"),[template(example_ok),limit(1)])");
+    if(!await until(()=>replies().length>before,15000))throw Error('statechart query did not answer');
+    return replies()[before].message;
+  };
+}
+
+async function statechartStartupFailureContract(W,check) {
+  const host=scopedWorkerCoordinator(W),events=[];
+  host.handleSwiWasmTrace=()=>{};
+  const handle=host.handleSwiWasmWorkerActorMessage;
+  host.handleSwiWasmWorkerActorMessage=function(pid,event) {
+    events.push({pid,...event.data});return handle.call(this,pid,event);
+  };
+  const run=statechartTestQuery(W);
+  const xml='<statechart version="0.2" initial="s"><state id="s"><spawn type="statechart"><![CDATA[<invalid/>]]></spawn></state></statechart>';
+  try {
+    await startToplevel(W);
+    const reply=await run('statechart_spawn(_,[src_text('+prologAtom(xml)+'),trace(false)])');
+    check(/^error\(/.test(reply)&&reply.includes('statechart_startup_error'),'failed initial child rejects parent creation: '+reply);
+    check(!events.some(e=>e.pid!==PID&&e.type==='ready'),'failed initialization never announces readiness');
+    check(await until(()=>host.live().length===0,5000),'failed startup leaves no chart or child Worker');
+    check(/^success\(/.test(await run('true')),'caller recovers after startup rejection');
+  } finally {await host.stop();}
+}
 
 // Thin test-only entry point for the implementation-neutral baseline adapter.
 // Assertions are supplied by trinity-conformance, not duplicated in this repo.

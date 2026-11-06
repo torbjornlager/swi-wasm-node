@@ -2665,15 +2665,16 @@ function createSwiWasmPromiseStore(options) {
       ].join("\n"), "/worker_statechart_actor.pl");
       Prolog.query("statechart_wasm:set_trace_hook(user:statechart_trace_hook)").once();
       // Do not announce this actor as ready until its SXML has passed DTD and
-      // semantic validation and the initial model has been constructed.  A
-      // startup exception then rejects actorStatechartSpawn/7 in the parent
-      // worker, so statechart_spawn/2 reports the error at the toplevel.
-      var startResult = Prolog.query("user:statechart_actor_start").once();
-      if (!startResult || startResult.error) {
-        throw new Error(startResult && startResult.message
-          ? startResult.message
-          : "statechart startup failed");
-      }
+      // semantic validation and the initial macrostep has completed. Entering
+      // the initial state can invoke children and await their startup, so this
+      // must use a yieldable query. Keep once/1 to avoid replaying initialization
+      // on backtracking. Rejection still reaches the parent before ready.
+      return Prolog.forEach(
+        "once(user:statechart_actor_start)", {}, function() {},
+        { heartbeat: 10000 }
+      ).then(function(answers) {
+        if (!answers) throw new Error("statechart startup failed");
+      });
     });
   }
 

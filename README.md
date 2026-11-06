@@ -97,6 +97,13 @@ DOM access, common paging/options, actor/statechart use, input, Abort, cleanup,
 startup failure, and main-session ownership. Core tests keep their existing
 Node/Python-only dependencies when this option is omitted.
 
+Statechart examples 13–17 also run in the default semantic-contract suite with
+real WASM engines and child Workers. The optional browser suite repeats their
+observable behaviour and cleanup through the public session API. Vendored,
+unmodified example documents live in `tests/fixtures/statechart-examples`;
+`STATECHART_EXAMPLES_DIR` can select the demonstrator's current example directory
+for an integration run.
+
 ## Source, schema and licensing
 
 Runtime code and tests originate from demonstrator revision
