@@ -1503,7 +1503,57 @@ async function portableWorker(W,check) {
  const replies=await nSends(W,n+2);check(replies.some((r,i)=>i>=n&&/^success\(/.test(r)&&r.includes('passed')),'shell input command parses characters independently of the wire decoder');
 }
 
+
+const portableCallCases = [
+  ["G=(fail,1),catch((call(G),fail),error(type_error(callable,(fail,1)),_),true)", "success"],
+  ["G=(fail,\\+1),call(G)", "failure"],
+  ["G=(true,\\+1),catch((call(G),fail),error(type_error(callable,1),_),true)", "success"],
+  ["G=(!,fail),(call(G);true)", "success"],
+  ["X=f()", "portable_term"],
+  ["X=pair('[]',[])", "portable_term"],
+  ["functor(X,'.',2),arg(1,X,a),arg(2,X,[])", "portable_term"]
+];
+
+async function browserPortableCallsWorker(W, check) {
+  await startToplevel(W, undefined, behaviourSource, "shell_toplevel");
+  for (const [goal, expected] of portableCallCases) {
+    const before = W.sends.length;
+    W.S.onmessage({data:{command:"toplevel_call", goal, options:"[limit(1)]"}});
+    const replies = await nSends(W, before+1);
+    const reply = replies[before] || "";
+    const matches = expected === "portable_term"
+      ? /^error\(/.test(reply) && reply.includes("representation_error(portable_term)")
+      : reply.startsWith(expected+"(");
+    check(matches, goal+" returns "+expected+" (received "+reply+")");
+  }
+}
+
+async function browserPortableCallsMain(_, check) {
+  const source = Function(runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0])
+    .call({swiWasmBehaviourProlog:()=>behaviourSource});
+  const engine = await require(path.join(ROOT,"web/swipl-bundle.js"))({arguments:["-q","--nosignals"]});
+  engine.FS.writeFile("/portable_calls.pl",source);
+  engine.prolog.query("use_module('/portable_calls.pl')").once();
+  engine.FS.writeFile("/portable_calls_source.pl", "portable_source(G) :- call(G).\n");
+  engine.prolog.query("swi_wasm_actor_bridge:load_private_source('/portable_calls_source.pl')").once();
+  const copied = engine.prolog.query(
+    "swi_wasm_actor_bridge:collect_spawn_source([src_predicates([portable_source/1])],Source)"
+  ).once();
+  check(copied && !String(copied.Source).includes("$web_call"), "copied source uses the application call");
+  const stored = engine.prolog.query("G=(fail,\\+1),\\+user:portable_source(G)").once();
+  check(stored && stored.success, "loaded source uses the same computed-call rule");
+  for (const [goal, expected] of portableCallCases) {
+    const result = engine.prolog.query(
+      "catch((swi_wasm_actor_bridge:session_solution(Text,0,_) -> R=success ; R=failure),"
+      +"error(representation_error(portable_term),_),R=portable_term)", {Text:goal}
+    ).once();
+    check(result && result.R === expected, goal+" returns "+expected);
+  }
+}
+
 const scenarios = {
+  portable_calls_worker: browserPortableCallsWorker,
+  portable_calls_main: browserPortableCallsMain,
   async early_request_rejection(W,check) {
     const unhandled=[];
     const observe=error=>unhandled.push(error);
