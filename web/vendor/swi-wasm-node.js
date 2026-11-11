@@ -3035,7 +3035,7 @@
               "    -> arg(1, Spec, Id), arg(2, Spec, Options)",
               "    ; type_error(supervisor_child_spec, Spec) ),",
               "    must_be(atom, Id), must_be(list, Options), maplist(browser_child_option, Options),",
-              "    ( option(start(_), Options) -> true ; throw(error(missing_start_option(Id), supervisor)) ).",
+              "    ( option(start(_), Options) -> true ; throw(error(existence_error(option,start(Id)), supervisor)) ).",
               "browser_child_option(Option) :-",
               "    must_be(nonvar, Option),",
               "    ( compound(Option), compound_name_arity(Option, Name, 1),",
