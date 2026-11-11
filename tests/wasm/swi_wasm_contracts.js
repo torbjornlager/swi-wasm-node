@@ -375,7 +375,7 @@ const invalidChildSpecs = [
   ["[child(42,[start(true)])]", "type_error(atom,42)"],
   ["[child(a,_)]", "instantiation_error"],
   ["[child(a,[start(true)|bad])]", "type_error(list,_)"],
-  ["[child(a,[])]", "missing_start_option(a)"],
+  ["[child(a,[])]", "existence_error(option,start(a))"],
   ["[child(a,[start(_)])]", "instantiation_error"],
   ["[child(a,[start(42)])]", "type_error(callable,42)"],
   ["[child(a,[start(_:true)])]", "instantiation_error"],
@@ -389,22 +389,22 @@ const invalidChildSpecs = [
   ["[child(a,[start(true)]),child(a,[start(true)])]", "permission_error(duplicate,supervisor_child_id,a)"],
   ["[child(a,[start(server(_,[]))])]", "instantiation_error"],
   ["[child(a,[start(server(cb,[initial_state(_),unknown(1)]))])]", "domain_error(spawn_option,unknown(1))"],
-  ["[child(a,[start(start_sub_supervisor([child(b,[])],[]))])]", "missing_start_option(b)"],
+  ["[child(a,[start(start_sub_supervisor([child(b,[])],[]))])]", "existence_error(option,start(b))"],
   ["[child(a,[start(start_sub_supervisor([],[period(0)]))])]", "domain_error(supervisor_period,0)"],
-  ["[child(a,[start(true)]),child(b,[])]", "missing_start_option(b)"]
+  ["[child(a,[start(true)]),child(b,[])]", "existence_error(option,start(b))"]
 ];
 async function childSpecContract(run, check, sideEffects, main) {
   for(const [spec,error] of invalidChildSpecs) {
     const goal="Specs="+spec+",catch((supervisor_spawn(Specs,Pid),fail),error("+error+",context(supervisor_spawn/3,_)),Caught=true),Caught==true,var(Pid)";
     check(await run(goal),"rejects initial specs "+spec);
   }
-  const dynamic="catch((supervisor_spawn_child(sup,child(a,[]),Reply),fail),error(missing_start_option(a),context(supervisor_spawn_child/3,_)),Caught=true),Caught==true,var(Reply)";
+  const dynamic="catch((supervisor_spawn_child(sup,child(a,[]),Reply),fail),error(existence_error(option,start(a)),context(supervisor_spawn_child/3,_)),Caught=true),Caught==true,var(Reply)";
   check(await run(dynamic),"invalid dynamic API request rejected before send");
   check(await run("Specs=[child(a,[start(true)])|Specs],catch((supervisor_spawn(Specs,_),fail),error(representation_error(cyclic_term),_),Caught=true),Caught==true"),"cyclic initial list rejected");
   check(await run("Specs=[child(a,[start(start_sub_supervisor(Specs,[]))])],catch((supervisor_spawn(Specs,_),fail),error(representation_error(cyclic_term),_),Caught=true),Caught==true"),"recursive child specification rejected");
   check(sideEffects()===0,"all invalid initial/dynamic specs rejected before any transport or startup");
   const b="swi_wasm_actor_bridge:";
-  check(await run("S=sup(one_for_one,1,5,[],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[])),error(error(missing_start_option(a),_)),S,After),After==S,"+b+"wasm_handle_supervisor_call(count_children,[specs-0,active-0,supervisors-0,workers-0],After,After)"),"malformed receiver request leaves supervisor responsive and unchanged");
+  check(await run("S=sup(one_for_one,1,5,[],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[])),error(error(existence_error(option,start(a)),_)),S,After),After==S,"+b+"wasm_handle_supervisor_call(count_children,[specs-0,active-0,supervisors-0,workers-0],After,After)"),"malformed receiver request leaves supervisor responsive and unchanged");
   check(await run("S=sup(one_for_one,1,5,[child(a,pid,child(a,[start(true)]))],[]),"+b+"wasm_handle_supervisor_call(start_child(child(a,[start(true)])),error(already_present),S,After),After==S"),"duplicate dynamic ID rejected without spawning");
   check(sideEffects()===0,"receiver validation and duplicates have no startup side effects");
   const valid="Specs=[child(a,[start(goal(X)),start(other(X)),restart(temporary),restart(permanent),shutdown(0.25),type(worker),significant(false),src_list([fact(X)])]),child(b,[start(server(cb,[initial_state(X),initial_state(other),name(first),name(second)]))]),child(c,[start(start_sub_supervisor([child(n,[start(goal(X))])],[strategy(rest_for_one),intensity(0),period(0.25)])),type(supervisor),shutdown(infinity)]),child(d,[start(true),shutdown(brutal_kill)])]";
@@ -2095,8 +2095,8 @@ const scenarios = {
     deliver(W,"'$sup'("+CLIENT+"@localhost,903,count_children)");
     deliver(W,"'$sup_stop'("+CLIENT+"@localhost)");
     const m=await nSends(W,5);
-    check(m.some(x=>/^-\(901,error\(error\(missing_start_option\(a\)/.test(x)),"malformed request delivers a validation error: "+JSON.stringify(m));
-    check(m.some(x=>/^-\(902,error\(error\(missing_start_option\(b\)/.test(x)),"nested invalid request delivers a validation error");
+    check(m.some(x=>/^-\(901,error\(error\(existence_error\(option,start\(a\)\)/.test(x)),"malformed request delivers a validation error: "+JSON.stringify(m));
+    check(m.some(x=>/^-\(902,error\(error\(existence_error\(option,start\(b\)\)/.test(x)),"nested invalid request delivers a validation error");
     check(m.includes("-(903,[-(specs,0),-(active,0),-(supervisors,0),-(workers,0)])"),"supervisor remains responsive with no children after invalid requests");
     check(m.some(x=>/\[stopped\],false\)/.test(x)),"supervisor loop stops normally after invalid additions");
     check(!W.posted.some(x=>x.type==="request"&&["spawn","reserve_pid","monitor"].includes(x.action)),"invalid additions start no children");
@@ -2131,7 +2131,7 @@ const scenarios = {
     global.self.swiWasmActorReceive=()=>Promise.resolve(mailbox.shift()||null);
     global.self.swiWasmActorSend=(pid,msg)=>{replies.push(msg);return Promise.resolve(true);};
     check(await run("swi_wasm_actor_bridge:wasm_supervisor_loop(sup(one_for_one,1,5,[],[]))"),"main supervisor loop survives malformed addition and stops normally");
-    check(replies.some(x=>/^-\(901,error\(error\(missing_start_option\(a\)/.test(x))&&replies.includes("-(902,[-(specs,0),-(active,0),-(supervisors,0),-(workers,0)])"),"main loop replies with validation error and unchanged child count: "+JSON.stringify(replies));
+    check(replies.some(x=>/^-\(901,error\(error\(existence_error\(option,start\(a\)\)/.test(x))&&replies.includes("-(902,[-(specs,0),-(active,0),-(supervisors,0),-(workers,0)])"),"main loop replies with validation error and unchanged child count: "+JSON.stringify(replies));
 
     check(calls.some(m=>m.action==="spawn"&&m.args[1].includes("sup(rest_for_one,0,0.25")),"main nested supervisor settings preserved");
   },
