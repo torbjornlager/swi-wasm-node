@@ -55,7 +55,7 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
   assert.notEqual(node.swiWasmActorWorkers,other.swiWasmActorWorkers);
   other.dispose();
   try {
-    await node.open({source:'square(X,Y):-Y is X*X.'});
+    await node.open({source:'square(X,Y):-Y is X*X.\n'+fs.readFileSync(path.join(ROOT,'tests/fixtures/prompt-correlation.pl'),'utf8')});
     let result=await node.query('square(3,Y)',{limit:1});
     assert.equal(result.type,'success');assert.equal(result.more,false);assert.equal(result.data[0].Y,'9');
     result=await node.query('member(X,[a,b,c])',{limit:1});
@@ -63,6 +63,10 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
     result=await node.next();assert.equal(result.data[0].X,'b');
     await node.stop();
     assert.equal((await node.query('true')).type,'success');
+    // The manual's actor API requires a fresh reference for every prompt.
+    result=await node.query('prompt_correlation_check');assert.equal(result.type,'success',JSON.stringify(result));
+    result=await node.query("toplevel_spawn(P,[session(true)]),toplevel_call(P,input('Input',X)),receive({prompt(P,R,'Input')->true}),respond(P,R,hello),receive({success(P,[input('Input',hello)],false)->true}),toplevel_halt(P)");
+    assert.equal(result.type,'success',JSON.stringify(result));
     assert.equal((await node.query('self(S),spawn(receive({ping(From)->From!pong}),P),P!ping(S),receive({pong->true})')).type,'success');
     result=await node.query('spawn(receive({stop->true}),P),monitor(P,R),exit(P,kill),receive({down(P,R,_)->true})');assert.equal(result.type,'success',JSON.stringify({result,events:events.slice(-10)}));
     result=await node.query(`statechart_spawn(P,[trace(true),src_text('<statechart version="0.2" initial="s"><state id="s"/></statechart>')]),exit(P,kill)`);

@@ -1489,6 +1489,8 @@ async function portableMain(W,check) {
  check(await run(`swi_wasm_actor_bridge:swi_wasm_read_line_term('"hé😀".',A),A=="hé😀"`),'read shim uses the same characters');
 }
 async function portableWorker(W,check) {
+ let nextPromptRef=8765432100;
+ W.control.reply=m=>m.action==="make_ref"?{result:String(nextPromptRef++)}:{result:true};
  const original=global.fetch;global.fetch=async url=>{const r=await original(url);return {ok:r.ok,text:async()=>await r.text()+(String(url).endsWith('/shared_db.pl')?'\nportable_shared("hé😀").\n':'')}};
  await startToplevel(W,undefined,behaviourSource,'shell_toplevel');
  async function run(goal) {
@@ -1499,7 +1501,11 @@ async function portableWorker(W,check) {
  check(await run(`portable_shared("hé😀"),current_prolog_flag(wasm_shared_db:double_quotes,chars)`),'shared database uses language characters');
  const n=W.sends.length;W.S.onmessage({data:{command:'toplevel_call',goal:'read(T),T=="hé😀",PortableResult=passed',options:'[limit(1)]'}});
  check(await until(()=>W.posted.some(m=>m.type==='request'&&m.action==='send'&&m.message.includes('prompt(')&&m.message.includes('\"|:\"'))),'read/1 requests terminal input');
- W.S.onmessage({data:{command:'toplevel_respond',input:'"hé😀".'}});
+ const promptWire=W.posted.find(m=>m.type==='request'&&m.action==='send'&&m.message.includes('prompt(')&&m.message.includes('\"|:\"'));
+ const promptMatch=/,\s*([0-9]+),/.exec(promptWire.message);
+ if(!promptMatch)throw new Error('unexpected prompt wire '+promptWire.message);
+ const promptRef=promptMatch[1];
+ W.S.onmessage({data:{command:'toplevel_respond',prompt_ref:promptRef,input:'"hé😀".'}});
  const replies=await nSends(W,n+2);check(replies.some((r,i)=>i>=n&&/^success\(/.test(r)&&r.includes('passed')),'shell input command parses characters independently of the wire decoder');
 }
 

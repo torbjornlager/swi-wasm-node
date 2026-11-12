@@ -1033,8 +1033,8 @@ function createSwiWasmPromiseStore(options) {
       data = typeof args[1] === "string" ? args[1] : formatValue(args[1]);
       post("output", { data: data });
     } else if (compound.functor === "prompt") {
-      data = typeof args[1] === "string" ? args[1] : formatValue(args[1]);
-      post("prompt", { data: data });
+      data = typeof args[2] === "string" ? args[2] : formatValue(args[2]);
+      post("prompt", { data: data, prompt_ref: formatValue(args[1]) });
     } else {
       post("error", { data: String(text || "Unexpected toplevel event") });
     }
@@ -1214,7 +1214,7 @@ function createSwiWasmPromiseStore(options) {
       "    register/2, register_service/2,",
       "    unregister/1, unregister_service/1,",
       "    whereis/2, whereis_service/2,",
-      "    respond/2,",
+      "    respond/3,",
       "    toplevel_spawn/1, toplevel_spawn/2,",
       "    toplevel_call/2, toplevel_call/3, toplevel_call_synch/3, toplevel_call_synch/4, toplevel_next_synch/2, toplevel_next_synch/3,",
       "    toplevel_next/1, toplevel_next/2,",
@@ -2044,9 +2044,9 @@ function createSwiWasmPromiseStore(options) {
       "    actor_await(Promise, PidText),",
       "    term_string(Pid, PidText).",
       "",
-      "respond(Pid, Answer) :-",
+      "respond(Pid, Ref, Answer) :-",
       "    self(Self),",
-      "    send(Pid, '$input'(Self, Answer)).",
+      "    send(Pid, '$input'(Self, Ref, Answer)).",
       "",
       "toplevel_spawn(Pid) :- toplevel_spawn(Pid, []).",
       "",
@@ -2124,7 +2124,8 @@ function createSwiWasmPromiseStore(options) {
       "",
       "stale_command('$next'(_)).",
       "stale_command('$stop').",
-      "stale_command('$input'(_, _)).",
+      "stale_command('$input'(_, _, _)).",
+      "stale_command('$input_text'(_, _, _)).",
       "",
       "ptcp_lifecycle(ptcp_options(Session, TimeLimit, IdleLimit), Session, TimeLimit, IdleLimit) :- !.",
       "ptcp_lifecycle(Session, Session, infinite, infinite).",
@@ -2371,11 +2372,11 @@ function createSwiWasmPromiseStore(options) {
       "    self(Self),",
       "    ( is_list(Prompt), maplist(browser_character,Prompt) -> string_chars(PromptTerm,Prompt) ; PromptTerm=Prompt ),",
       "    (   option(target(Target), Options)",
-      "    ->  send(Target, prompt(Self, PromptTerm)),",
-      "        receive({'$input'(_, Answer) -> true ; '$input_text'(_, Line) -> language_read(Line,Answer)})",
+      "    ->  make_ref(Ref), send(Target, prompt(Self, Ref, PromptTerm)),",
+      "        receive({'$input'(_, Ref, Answer) -> true ; '$input_text'(_, Ref, Line) -> language_read(Line,Answer)})",
       "    ;   io_target(Target)",
-      "    ->  send(Target, prompt(Self, PromptTerm)),",
-      "        receive({'$input'(_, Answer) -> true ; '$input_text'(_, Line) -> language_read(Line,Answer)})",
+      "    ->  make_ref(Ref), send(Target, prompt(Self, Ref, PromptTerm)),",
+      "        receive({'$input'(_, Ref, Answer) -> true ; '$input_text'(_, Ref, Line) -> language_read(Line,Answer)})",
       "    ;   ( atom(PromptTerm) -> atom_string(PromptTerm,PromptText)",
       "        ; string(PromptTerm) -> PromptText=PromptTerm ; term_string(PromptTerm,PromptText) ),",
       "        Promise := actorInput(#PromptText),",
@@ -2810,16 +2811,17 @@ function createSwiWasmPromiseStore(options) {
       return;
     }
     if (message.command === "toplevel_respond" && workerRole === "shell_toplevel") {
-      // Mirror the main-thread reader: an empty line is end_of_file; otherwise
-      // strip a single trailing '.' (the read/1 terminator) and parenthesise
-      // the answer so the whole line is ONE argument term.  Without the
-      // parentheses a bare comma or operator (e.g. read of `a, b.`) would turn
-      // the message into '$input'/3 and the shell's receive({'$input'(_, A)})
-      // would never match, hanging the prompt.
+      // Mirror the reader: an empty line is end_of_file. Keep the input
+      // as one term so commas and operators cannot add wire arguments.
       var inputLine = message.input == null ? "" : String(message.input);
       var inputBody = inputLine.replace(/\.[ \t]*$/, "");
       var inputArg = inputBody.trim() === "" ? "end_of_file" : "(" + inputBody + ")";
-      deliver("'$input_text'(terminal," + JSON.stringify(inputArg) + ")");
+      // The reference comes from the prompt event, never from the payload.
+      if (!/^[0-9]+$/.test(String(message.prompt_ref))) {
+        post("error", { data: "Missing or invalid prompt reference" });
+        return;
+      }
+      deliver("'$input_text'(terminal," + message.prompt_ref + "," + JSON.stringify(inputArg) + ")");
       post("responded", {});
       return;
     }
