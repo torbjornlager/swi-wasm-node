@@ -191,18 +191,26 @@ async function main() {
   ok(!!rejectedOptionSource,
      "shell call rejects source hidden in call options");
 
-  // 9b. A read/1 answer carrying a comma + trailing '.' is parenthesised and
-  // the period stripped, so '$input' stays arity 2 (a bare comma would make
-  // it '$input'/3 and the shell's receive would never match).
-  S.onmessage({ data: { command: "toplevel_respond", input: "a, b." } });
+  // A reader answer remains one text argument alongside the prompt reference.
+  S.onmessage({ data: { command: "toplevel_respond", prompt_ref: "1234567890", input: "a, b." } });
   const shellInput = await S.actorReceive(-1);
-  ok(shellInput === '\'$input_text\'(terminal,"(a, b)")',
+  ok(shellInput === '\'$input_text\'(terminal,1234567890,"(a, b)")',
      "shell input parenthesises the answer and strips the read terminator");
   // An empty answer maps to end_of_file (not the invalid term '()').
-  S.onmessage({ data: { command: "toplevel_respond", input: "" } });
+  S.onmessage({ data: { command: "toplevel_respond", prompt_ref: "1234567890", input: "" } });
   const shellEof = await S.actorReceive(-1);
-  ok(shellEof === '\'$input_text\'(terminal,"end_of_file")',
+  ok(shellEof === '\'$input_text\'(terminal,1234567890,"end_of_file")',
      "an empty shell input answer is end_of_file");
+
+  S.actorToplevelEvent({$t:"t", prompt:["invalid_shell",1234567890,"Question"]},
+                       "prompt(invalid_shell,1234567890,'Question')");
+  const promptEvent = S._posted.filter(m=>m.type === "prompt").pop();
+  ok(promptEvent.data === "Question" && promptEvent.prompt_ref === "1234567890",
+     "terminal prompt preserves its reference independently of its payload");
+  S.onmessage({data:{command:"toplevel_respond",input:"ignored."}});
+  ok((await S.actorReceive(0)) === null && S._posted.some(m=>
+       m.type === "error" && m.data === "Missing or invalid prompt reference"),
+     "an unreferenced terminal reply is rejected without entering the mailbox");
 
   // Prolog toplevel events cross the Worker boundary as the canonical API
   // response itself, not wrapped in a private shell_event envelope.
