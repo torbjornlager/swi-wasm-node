@@ -294,8 +294,11 @@
             return loadErr ? Promise.reject(loadErr) : Promise.resolve();
           },
           driveSwiWasmMainQuery: function(goal, onAnswer) {
-            var drivenGoal = "swi_wasm_actor_bridge:swi_wasm_drive(user:(" + goal + "))";
-            return this.swiWasmProlog.forEach(drivenGoal, {}, onAnswer, { heartbeat: 1 });
+            var drivenGoal = "swi_wasm_actor_bridge:swi_wasm_drive_text(" +
+              this.prologQuotedText(goal) + ",Bindings)";
+            return this.swiWasmProlog.forEach(drivenGoal, {}, function(answer) {
+              onAnswer(answer.Bindings);
+            }, { heartbeat: 1 });
           },
           makeBrowserPromiseRef: function(existing) {
             var ref;
@@ -4232,8 +4235,15 @@
               "session_solution_(Text, Offset, Bindings) :-",
               "    term_string(Goal, Text, [variable_names(Vars),double_quotes(chars),module(user)]),",
               "    offset(Offset, user:Goal),",
+              "    portable_solution_bindings(Vars, Bindings).",
+              "portable_solution_bindings(Vars, Bindings) :-",
               "    ( term_attvars(Vars, []) -> check_portable_wire_term(Vars), dict_create(Bindings, bindings, Vars)",
               "    ; throw(error(representation_error(constraints),_)) ).",
+              "",
+              "% Legacy demonstrators also cross the Prolog/JS binding boundary.",
+              "swi_wasm_drive_text(Text, Bindings) :-",
+              "    term_string(Goal, Text, [variable_names(Vars),double_quotes(chars),module(user)]),",
+              "    swi_wasm_drive((call(user:Goal), portable_solution_bindings(Vars, Bindings))).",
               "",
               "swi_wasm_drive(Goal) :-",
               "    setup_call_cleanup(true, swi_wasm_drive_goal(Goal), swi_wasm_flush_output).",
@@ -4249,7 +4259,9 @@
               "swi_wasm_flush_output :-",
               "    catch(flush_output(user_output), _, true),",
               "    catch(flush_output(user_error), _, true).",
-              "swi_wasm_query_exception(Error) :-",
+              "swi_wasm_query_exception(Error0) :-",
+              "    catch((check_portable_wire_term(Error0), Error = Error0),",
+              "          error(representation_error(portable_term), C), Error = error(representation_error(portable_term), C)),",
               "    swi_wasm_flush_output,",
               "    term_to_atom(Error, Text),",
               "    _ := swiWasmNoteException(#Text),",

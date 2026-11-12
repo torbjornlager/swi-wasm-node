@@ -1537,6 +1537,22 @@ async function portableGuardMain(W,check) {
  check(await run("catch(swi_wasm_actor_bridge:wire_text('.'(a,[]),_),E,true),nonvar(E),E=error(representation_error(portable_term),_)"),'main canonical wire guard restored');
 }
 
+async function portableGuardLegacyMain(W,check) {
+ const source=Function(runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0]).call({swiWasmBehaviourProlog:()=>behaviourSource});
+ const engine=await require(path.join(ROOT,'web/swipl-bundle.js'))({arguments:['-q','--nosignals']});
+ await workbenchMethod('installSwiWasmSharedDatabase','swiWasmBehaviourProlog').call({swiWasmRpcProlog:()=>source},engine.prolog,engine);
+ global.self.swiWasmNoteDet=()=>{};global.self.swiWasmNoteException=()=>{};global.self.swiWasmAwaitMore=()=>Promise.resolve(true);
+ const host={swiWasmProlog:engine.prolog,prologQuotedText:workbenchMethod('prologQuotedText','toplevelSpawnOptionsText')};
+ const drive=workbenchMethod('driveSwiWasmMainQuery','makeBrowserPromiseRef');
+ async function run(goal){const rows=[];let error;try{await drive.call(host,goal,r=>rows.push(r));}catch(e){error=String(e);}return {rows,error};}
+ for(const goal of ["A='.'(a,[])","A='[]'","A=f()","A=nested([ok,'.'(a,[])])","throw(error(test('.'(a,[])),_))"]) {
+  const r=await run(goal);check(r.rows.length===0&&/portable_term/.test(r.error), 'legacy driver rejects before callback: '+goal);
+  const next=await run('A=[a],B=[],Pair=pair(X,X,Y),X\\==Y');check(!next.error&&next.rows.length===1,'legacy driver recovers with valid lists/sharing');
+ }
+ let r=await run("_='.'(a,[]),T=ok");check(!r.error&&r.rows.length===1,'local anonymous values do not cross the binding boundary');
+ r=await run("(A=ok;A='.'(a,[]))");check(r.rows.length===1&&r.rows[0].A==='ok'&&/portable_term/.test(r.error),'legacy paging rejects a later nonportable binding');
+}
+
 const scenarios = {
   async early_request_rejection(W,check) {
     const unhandled=[];
@@ -1568,6 +1584,7 @@ const scenarios = {
   compatibility_output_ordering: mainOutputOrdering,
   portable_term_guards_worker: portableGuardWorker,
   portable_term_guards_main: portableGuardMain,
+  portable_term_guards_legacy_main: portableGuardLegacyMain,
   portable_text_worker: portableWorker,
   portable_text_main: portableMain,
   async uri_input_contract(W, check) {
