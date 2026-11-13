@@ -55,6 +55,8 @@ def main():
             rows.append(run('session-api-browser',[node,'tests/wasm/swi_wasm_sessions_browser.cjs'],env,root,a.report))
             env['STATECHART_REPORT']=str(a.report/'statechart-examples-browser.json')
             rows.append(run('statechart-examples-browser',[node,'tests/wasm/swi_wasm_statechart_examples_browser.cjs'],env,root,a.report))
+            env['CHART_HALT_REPORT']=str(a.report/'chart-halt-browser.json')
+            rows.append(run('chart-halt-browser',[node,'tests/wasm/swi_wasm_chart_halt_browser.cjs'],env,root,a.report))
             env['LIBRARY_REPORT']=str(a.report/'selective-receive-browser.json')
             rows.append(run('selective-receive-browser',[node,'tests/wasm/swi_wasm_receive_browser.cjs'],env,root,a.report))
             env['LIBRARY_REPORT']=str(a.report/'receive-controls-browser.json')
