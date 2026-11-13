@@ -1509,6 +1509,50 @@ async function portableWorker(W,check) {
  const replies=await nSends(W,n+2);check(replies.some((r,i)=>i>=n&&/^success\(/.test(r)&&r.includes('passed')),'shell input command parses characters independently of the wire decoder');
 }
 
+async function portableGuardWorker(W,check) {
+ await startToplevel(W,undefined,behaviourSource,'shell_toplevel');
+ async function run(goal) {
+  const n=W.sends.length;
+  W.S.onmessage({data:{command:'toplevel_call',goal,options:'[limit(1),once(true)]'}});
+  if(!await until(()=>W.sends.length>n||done(W).length>0,5000))throw new Error('missing portable answer');
+  if(done(W).length)throw new Error(JSON.stringify(done(W)));
+  return messages(W)[n]||'';
+ }
+ for(const goal of ["A='.'(a,[])","A='[]'","A=f()","A=nested([ok,'.'(a,[])])"]) {
+  const error=await run(goal);check(/^error\(/.test(error)&&error.includes('representation_error(portable_term)'),goal+' rejected as portable_term: '+error);
+  check(/^success\(/.test(await run('A=[a],A==[a]')),'worker remains usable after rejection');
+ }
+ check(/^success\(/.test(await run("swi_wasm_actor_bridge:wire_texts([pair(X,X,Y),X,Y],[T,A,B]),A\\==B,var(X),var(Y),X\\==Y")),'wire guard preserves sharing and distinct variables');
+}
+async function portableGuardMain(W,check) {
+ const source=Function(runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0]).call({swiWasmBehaviourProlog:()=>behaviourSource});
+ const engine=await require(path.join(ROOT,'web/swipl-bundle.js'))({arguments:['-q','--nosignals']});
+ await workbenchMethod('installSwiWasmSharedDatabase','swiWasmBehaviourProlog').call({swiWasmRpcProlog:()=>source},engine.prolog,engine);
+ async function run(goal){let n=0;await engine.prolog.forEach(goal,()=>n++);return n===1;}
+ for(const goal of ["A='.'(a,[])","A='[]'","A=f()","A=nested([ok,'.'(a,[])])"]) {
+  const quoted=JSON.stringify(goal);
+  check(await run('catch(swi_wasm_actor_bridge:session_solution('+quoted+',0,_),E,true),nonvar(E),E=error(representation_error(portable_term),_)'),goal+' rejected before JSON binding conversion');
+ }
+ check(await run('swi_wasm_actor_bridge:session_solution("A=[a],B=[],C=pair(X,X,Y)",0,_)'),'main bindings accept ordinary lists and variables');
+ check(await run("catch(swi_wasm_actor_bridge:wire_text('.'(a,[]),_),E,true),nonvar(E),E=error(representation_error(portable_term),_)"),'main canonical wire guard restored');
+}
+
+async function portableGuardLegacyMain(W,check) {
+ const source=Function(runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0]).call({swiWasmBehaviourProlog:()=>behaviourSource});
+ const engine=await require(path.join(ROOT,'web/swipl-bundle.js'))({arguments:['-q','--nosignals']});
+ await workbenchMethod('installSwiWasmSharedDatabase','swiWasmBehaviourProlog').call({swiWasmRpcProlog:()=>source},engine.prolog,engine);
+ global.self.swiWasmNoteDet=()=>{};global.self.swiWasmNoteException=()=>{};global.self.swiWasmAwaitMore=()=>Promise.resolve(true);
+ const host={swiWasmProlog:engine.prolog,prologQuotedText:workbenchMethod('prologQuotedText','toplevelSpawnOptionsText')};
+ const drive=workbenchMethod('driveSwiWasmMainQuery','makeBrowserPromiseRef');
+ async function run(goal){const rows=[];let error;try{await drive.call(host,goal,r=>rows.push(r));}catch(e){error=String(e);}return {rows,error};}
+ for(const goal of ["A='.'(a,[])","A='[]'","A=f()","A=nested([ok,'.'(a,[])])","throw(error(test('.'(a,[])),_))"]) {
+  const r=await run(goal);check(r.rows.length===0&&/portable_term/.test(r.error), 'legacy driver rejects before callback: '+goal);
+  const next=await run('A=[a],B=[],Pair=pair(X,X,Y),X\\==Y');check(!next.error&&next.rows.length===1,'legacy driver recovers with valid lists/sharing');
+ }
+ let r=await run("_='.'(a,[]),T=ok");check(!r.error&&r.rows.length===1,'local anonymous values do not cross the binding boundary');
+ r=await run("(A=ok;A='.'(a,[]))");check(r.rows.length===1&&r.rows[0].A==='ok'&&/portable_term/.test(r.error),'legacy paging rejects a later nonportable binding');
+}
+
 const scenarios = {
   async early_request_rejection(W,check) {
     const unhandled=[];
@@ -1538,6 +1582,9 @@ const scenarios = {
     check(count===1,'zero and fractional waits still yield successfully');
   },
   compatibility_output_ordering: mainOutputOrdering,
+  portable_term_guards_worker: portableGuardWorker,
+  portable_term_guards_main: portableGuardMain,
+  portable_term_guards_legacy_main: portableGuardLegacyMain,
   portable_text_worker: portableWorker,
   portable_text_main: portableMain,
   async uri_input_contract(W, check) {

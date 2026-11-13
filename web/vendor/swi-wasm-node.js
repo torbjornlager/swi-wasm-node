@@ -294,8 +294,11 @@
             return loadErr ? Promise.reject(loadErr) : Promise.resolve();
           },
           driveSwiWasmMainQuery: function(goal, onAnswer) {
-            var drivenGoal = "swi_wasm_actor_bridge:swi_wasm_drive(user:(" + goal + "))";
-            return this.swiWasmProlog.forEach(drivenGoal, {}, onAnswer, { heartbeat: 1 });
+            var drivenGoal = "swi_wasm_actor_bridge:swi_wasm_drive_text(" +
+              this.prologQuotedText(goal) + ",Bindings)";
+            return this.swiWasmProlog.forEach(drivenGoal, {}, function(answer) {
+              onAnswer(answer.Bindings);
+            }, { heartbeat: 1 });
           },
           makeBrowserPromiseRef: function(existing) {
             var ref;
@@ -3717,6 +3720,7 @@
               "    term_attvars(Term, []),",
               "    \\+ (sub_term(Sub, Term), nonvar(Sub), blob(Sub, BlobType), BlobType \\== text, BlobType \\== ucs_text, BlobType \\== reserved_symbol).",
               "must_be_transportable_term(Term) :-",
+              "    check_portable_wire_term(Term),",
               "    ( transportable_term(Term) -> true",
               "    ; throw(error(type_error(transportable_term, Term), send/2)) ).",
               "",
@@ -4098,8 +4102,14 @@
               "    statechart_wasm:statechart_stop,",
               "    _ := swiWasmNamedChartStopped(),",
               "    Reply = stopped.",
-              "statechart_halt(Pid, _, _) :-",
-              "    throw(error(existence_error(statechart, Pid), statechart_halt/3)).",
+              "statechart_halt(Pid, Reply, Timeout) :-",
+              "    self(Self),",
+              "    monitor(Pid, Ref),",
+              "    send(Pid, '$statechart_stop'(Self)),",
+              "    receive({",
+              "        reply(Reply) -> demonitor(Ref) ;",
+              "        down(Pid, Ref, _Reason) -> Reply = killed",
+              "    }, [timeout(Timeout), on_timeout((exit(Pid, kill), Reply = killed))]).",
               "",
               "statechart_spawn_source(Options,Kind,Source) :- browser_statechart_source(Options,Kind,Source).",
               "",
@@ -4226,10 +4236,20 @@
               "%  after the goal so the final, choicepoint-free solution prints '.'",
               "%  instead of ' ; false'.",
               "session_solution(Text, Offset, Bindings) :-",
+              "    catch(session_solution_(Text, Offset, Bindings), Error,",
+              "          (check_portable_wire_term(Error), throw(Error))).",
+              "session_solution_(Text, Offset, Bindings) :-",
               "    term_string(Goal, Text, [variable_names(Vars),double_quotes(chars),module(user)]),",
               "    offset(Offset, user:Goal),",
-              "    ( term_attvars(Vars, []) -> dict_create(Bindings, bindings, Vars)",
+              "    portable_solution_bindings(Vars, Bindings).",
+              "portable_solution_bindings(Vars, Bindings) :-",
+              "    ( term_attvars(Vars, []) -> check_portable_wire_term(Vars), dict_create(Bindings, bindings, Vars)",
               "    ; throw(error(representation_error(constraints),_)) ).",
+              "",
+              "% Legacy demonstrators also cross the Prolog/JS binding boundary.",
+              "swi_wasm_drive_text(Text, Bindings) :-",
+              "    term_string(Goal, Text, [variable_names(Vars),double_quotes(chars),module(user)]),",
+              "    swi_wasm_drive((call(user:Goal), portable_solution_bindings(Vars, Bindings))).",
               "",
               "swi_wasm_drive(Goal) :-",
               "    setup_call_cleanup(true, swi_wasm_drive_goal(Goal), swi_wasm_flush_output).",
@@ -4245,7 +4265,9 @@
               "swi_wasm_flush_output :-",
               "    catch(flush_output(user_output), _, true),",
               "    catch(flush_output(user_error), _, true).",
-              "swi_wasm_query_exception(Error) :-",
+              "swi_wasm_query_exception(Error0) :-",
+              "    catch((check_portable_wire_term(Error0), Error = Error0),",
+              "          error(representation_error(portable_term), C), Error = error(representation_error(portable_term), C)),",
               "    swi_wasm_flush_output,",
               "    term_to_atom(Error, Text),",
               "    _ := swiWasmNoteException(#Text),",
@@ -4350,9 +4372,15 @@
               "%  numbervars, explicit variable names; read with double_quotes=string.",
               "wire_text(Term, Text) :- wire_texts([Term], [Text]).",
               "wire_texts(Terms, Texts) :-",
+              "    maplist(check_portable_wire_term, Terms),",
               "    term_variables(Terms, Vars),",
               "    wire_variable_names(Vars, 1, Names),",
               "    maplist(wire_write(Names), Terms, Texts).",
+              "check_portable_wire_term(Term) :-",
+              "    ( acyclic_term(Term), sub_term(Sub, Term), ambiguous_wire_subterm(Sub)",
+              "    -> throw(error(representation_error(portable_term), _)) ; true ).",
+              "ambiguous_wire_subterm(Sub) :-",
+              "    ( Sub == '[]' ; compound(Sub), compound_name_arity(Sub, Name, Arity), (Arity == 0 ; Name == '.', Arity == 2) ).",
               "wire_write(Names, Term, Text) :-",
               "    with_output_to(string(Text),",
               "        write_term(Term, [quoted(true), ignore_ops(true), portray(false), numbervars(false), variable_names(Names)])).",

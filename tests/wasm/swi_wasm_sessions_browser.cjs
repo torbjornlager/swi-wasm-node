@@ -63,6 +63,17 @@ const {chromium} = require('playwright');
         require(a.type==='success'&&a.data.length===2&&a.more,'partial page before exception');
         a=await n.next();require(a.type==='error'&&/partial_probe/.test(a.data),'Next delivers deferred exception');
         require((await n.query('true')).type==='success','recover after exception');
+        for (const goal of ["A='.'(a,[])", "A='[]'", "A=f()", "throw(error(test('.'(a,[])),_))", "A=nested([ok,'.'(a,[])])"]) {
+          a=await n.query(goal);
+          require(a.type==='error'&&/representation_error\(portable_term\)/.test(a.details||a.data), 'portable binding rejected '+goal);
+          a=await n.query('A=[a],B=[],P=pair(X,X,Y),X\\==Y');
+          require(a.type==='success'&&a.data[0].A==='[a]'&&a.data[0].B==='[]', 'valid lists and sharing after rejection');
+        }
+        a=await n.query("(A=ok;A='.'(a,[]))",{limit:1});
+        require(a.type==='success'&&a.more,'valid page before nonportable answer');
+        a=await n.next();
+        require(a.type==='error'&&/portable_term/.test(a.details||a.data),'nonportable next page rejected');
+        require((await n.query('true')).type==='success','session usable after nonportable next page');
         a=await n.query('dif(X,a)');require(a.type==='error'&&/constraints/.test(a.data),'attributed answers rejected');
         a=await n.query('(X=ok;dif(X,a))',{limit:3});require(a.type==='error'&&/constraints/.test(a.data),'constraint error discards the whole page');
         a=await n.query('writeln(flush_probe),fail');require(a.type==='failure','failure envelope');
