@@ -361,6 +361,10 @@ function createSwiWasmPromiseStore(options) {
   }
 
   function actorReceive(timeoutSeconds) {
+    // A chart macrostep may end in an idle state after format/2 without a
+    // newline. Prolog has flushed its streams; publish the JS fragment before
+    // waiting for the next event rather than retaining it until termination.
+    if (workerRole === "statechart_actor") flushOutput(true);
     if (mailbox.length > 0) {
       return Promise.resolve(mailbox.shift());
     }
@@ -2685,6 +2689,10 @@ function createSwiWasmPromiseStore(options) {
         { heartbeat: 10000 }
       ).then(function(answers) {
         if (!answers) throw new Error("statechart startup failed");
+        // Initial eventless transitions run before runGoal(), which clears
+        // its output buffer. Preserve their final unterminated fragment and
+        // publish it before announcing ready, even for an already-final chart.
+        flushOutput(true);
       });
     });
   }

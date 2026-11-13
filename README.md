@@ -104,6 +104,14 @@ unmodified example documents live in `tests/fixtures/statechart-examples`;
 `STATECHART_EXAMPLES_DIR` can select the demonstrator's current example directory
 for an integration run.
 
+The browser suite also runs the unmodified `08 closure.xml`. It requires all six
+computed edges to appear exactly once before the spawn answer, including when
+`format/2` has no newline. Dedicated statechart Workers publish pending output
+after their initial macrostep and before waiting for another event. This keeps
+startup text from being erased by the actor loop's output-buffer reset and makes
+partial output visible while a chart is idle. The regression also checks partial
+startup, event and final output plus actor cleanup.
+
 ## Source, schema and licensing
 
 Runtime code and tests originate from demonstrator revision
