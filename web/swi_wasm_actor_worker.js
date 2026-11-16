@@ -1177,7 +1177,13 @@ function createSwiWasmPromiseStore(options) {
     }
     var path = String(fileName || "/worker_user_code.pl");
     Module.FS.writeFile(path, String(sourceText));
-    Prolog.query("swi_wasm_actor_bridge:load_private_source(File)", {File:path}).once();
+    var rc = Prolog.query("swi_wasm_actor_bridge:load_private_source_status(File,Status)", {File:path}).once();
+    var status = rc && rc.Status !== undefined ? String(rc.Status) : "";
+    if (status !== "ok") {
+      //  Carry the Prolog exception term as text to the creating parent.
+      throw new Error(status.indexOf("web_prolog_exception:") === 0 ? status
+        : "web_prolog_exception:" + "error(system_error(private_source_load_failed),_)");
+    }
   }
 
   function installSharedDatabase() {
@@ -1344,7 +1350,7 @@ function createSwiWasmPromiseStore(options) {
       "        option(link(Link), Options, true),",
       "        term_string(Link, LinkText),",
       "        Promise := actorSpawnWithPid(#PidText, #GoalText, #ExtraSource, #NameText, #LinkText),",
-      "        actor_await(Promise, SpawnedText),",
+      "        catch(actor_await(Promise, SpawnedText), SpawnError, rethrow_creation_error(SpawnError)),",
       "        term_string(SpawnedPid, SpawnedText), SpawnedPid == LocalPid",
       "    ;   collect_spawn_source(Options, ExtraSource),",
       "        term_string(Node, NodeText),",
@@ -2082,7 +2088,7 @@ function createSwiWasmPromiseStore(options) {
       "        Lifecycle = ptcp_options(Session, TimeLimit, IdleLimit),",
       "        term_string(swi_wasm_actor_bridge:ptcp(Pid, Target, Lifecycle), GoalText),",
       "        Promise := actorSpawnWithPid(#PidText, #GoalText, #ExtraSource),",
-      "        actor_await(Promise, SpawnedText),",
+      "        catch(actor_await(Promise, SpawnedText), SpawnError, rethrow_creation_error(SpawnError)),",
       "        term_string(SpawnedPid, SpawnedText), SpawnedPid == LocalPid",
       "    ;   term_string(Node, NodeText),",
       "        term_string(Session, SessionText),",
@@ -2426,13 +2432,59 @@ function createSwiWasmPromiseStore(options) {
       "user:message_hook(ignored_weak_import(user, swi_wasm_actor_bridge:_), warning, _) :-",
       "    swi_wasm_actor_bridge:internal_behaviour_loading.",
       "",
+      "% A directive in actor or session source that fails makes creation raise",
+      "% error(directive_failed(Directive), _), as on native SWI, Trealla and ECLiPSe.",
+      "% SWI-Prolog itself only prints a warning that a remote creator never sees.",
+      ":- dynamic recording_directive_failures/0, source_directive_failure/1.",
+      "user:message_hook(goal_failed(directive, Goal), warning, _) :-",
+      "    swi_wasm_actor_bridge:recording_directive_failures,",
+      "    assertz(swi_wasm_actor_bridge:source_directive_failure(Goal)).",
+      "",
       "load_private_source(File) :-",
+      "    failing_directives_as_errors(load_private_source_unchecked(File)).",
+      "load_private_source_unchecked(File) :-",
       "    setup_call_cleanup(",
       "        asserta(suppress_shared_override_warnings, Ref),",
       "        load_behaviour_source(File),",
       "        erase(Ref)",
       "    ),",
       "    restore_shared_db_imports.",
+      "",
+      "failing_directives_as_errors(Goal) :-",
+      "    (   recording_directive_failures",
+      "    ->  call(Goal)",
+      "    ;   retractall(source_directive_failure(_)),",
+      "        setup_call_cleanup(",
+      "            asserta(recording_directive_failures, Ref),",
+      "            call(Goal),",
+      "            erase(Ref)),",
+      "        (   retract(source_directive_failure(Qualified))",
+      "        ->  retractall(source_directive_failure(_)),",
+      "            strip_module(Qualified, _, Directive),",
+      "            throw(error(directive_failed(Directive), _))",
+      "        ;   true",
+      "        )",
+      "    ).",
+      "",
+      "% Startup exceptions cross the Worker boundary as canonical text after a",
+      "% marker; rethrow_creation_error/1 turns them back into the original term.",
+      "load_private_source_status(File, Status) :-",
+      "    catch(( load_private_source(File), atom_string(ok, Status) ),",
+      "          Error,",
+      "          ( with_output_to(string(Text), write_canonical(Error)),",
+      "            string_concat('web_prolog_exception:', Text, Status) )).",
+      "",
+      "rethrow_creation_error(Error) :-",
+      "    blob(Error, Type), Type \\== text, Type \\== reserved_symbol,",
+      "    Message := swiWasmStartupErrorText(#Error),",
+      "    sub_string(Message, Before, Length, _, 'web_prolog_exception:'),",
+      "    Start is Before + Length,",
+      "    sub_string(Message, Start, _, 0, TermText),",
+      "    catch(term_string(Term, TermText), _, fail),",
+      "    !,",
+      "    throw(Term).",
+      "rethrow_creation_error(Error) :-",
+      "    throw(Error).",
       "",
       "user:message_hook(redefined_procedure(_, _), warning, Lines) :-",
       "    suppress_shared_override_warnings,",
@@ -2770,7 +2822,9 @@ function createSwiWasmPromiseStore(options) {
       });
     }).catch(function(error) {
       flushOutput(true);
-      post("error", { error: String(error) });
+      var text = error && error.message && error.message.indexOf("web_prolog_exception:") === 0
+        ? error.message : String(error);
+      post("error", { error: text });
     });
   }
 

@@ -40,6 +40,9 @@ const {chromium} = require('playwright');
           require((await independent.query('other_value(X)')).data[0].X==='separate','Worker session coexists with main');independent.dispose();
         }
         require((await n.query('self(S),spawn(receive({ping(From)->From!pong}),P),P!ping(S),receive({pong->true})')).type==='success','actor messaging');
+        require((await n.query("catch(spawn(true,P,[src_text(':- fail.'),link(false)]),E,true),nonvar(E),E=error(directive_failed(D),_),D==fail,var(P)")).type==='success','failing source directive makes spawn raise directive_failed');
+        require((await n.query("catch(toplevel_spawn(P,[src_text('t(a). :- t(b).')]),E,true),nonvar(E),E=error(directive_failed(D),_),D==t(b),var(P)")).type==='success','failing source directive makes toplevel_spawn raise directive_failed');
+        require((await n.query("self(S),spawn((ok_dir(V),S!got(V)),_,[src_text(':- dynamic d/1. ok_dir(yes). :- ok_dir(yes).')]),receive({got(R)->true},[timeout(10)]),R==yes")).type==='success','succeeding source directives still create the actor');
         require((await n.query(`statechart_spawn(P,[trace(true),src_text('<statechart version="0.2" initial="s"><state id="s"/></statechart>')]),exit(P,kill)`)).type==='success','statechart lifecycle');
         let a=await n.query('member(X,[a,b,c])');
         require(a.type==='success'&&a.data.map(r=>r.X).join(',')==='a,b,c'&&!a.more,'default collects all answers');

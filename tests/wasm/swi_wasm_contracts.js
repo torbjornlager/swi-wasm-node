@@ -496,6 +496,29 @@ async function behaviourWarningContract(run, check, incomingSource) {
 }
 
 
+// A failing directive in private source is a creation error on every engine:
+// error(directive_failed(Directive), _), never a warning followed by success.
+async function directiveFailureContract(run, check) {
+  const b="swi_wasm_actor_bridge:";
+  const marker="web_prolog_exception:";
+  const mk=t=>{globalThis.wasmDirectiveTestError=()=>new Error(t);if(global.self)global.self.wasmDirectiveTestError=globalThis.wasmDirectiveTestError;};
+  if(!globalThis.swiWasmStartupErrorText)globalThis.swiWasmStartupErrorText=e=>String(e&&e.message||e);
+  if(global.self&&!global.self.swiWasmStartupErrorText)global.self.swiWasmStartupErrorText=globalThis.swiWasmStartupErrorText;
+  const write=(file,text)=>"setup_call_cleanup(open('"+file+"',write,S),format(S,'~s',["+JSON.stringify(text)+"]),close(S))";
+  check(await run(write("/directive_fail.pl",":- fail.\ndirective_after_fail(yes).\n")+",catch(("+b+"load_private_source('/directive_fail.pl'),fail),error(directive_failed(D),_),D==fail)"),"':- fail.' raises directive_failed(fail)");
+  check(await run(write("/directive_goal.pl","directive_goal_fact(a).\n:- directive_goal_fact(b).\n")+",catch(("+b+"load_private_source('/directive_goal.pl'),fail),error(directive_failed(D),_),D==directive_goal_fact(b))"),"a failing goal directive is reported unqualified");
+  check(await run(write("/directive_two.pl",":- fail.\n:- 1 > 2.\n")+",catch(("+b+"load_private_source('/directive_two.pl'),fail),error(directive_failed(D),_),D==fail)"),"the first failing directive is reported");
+  check(await run(write("/directive_ok.pl",":- dynamic directive_ok_dyn/1.\ndirective_ok_fact(1).\n:- true.\n")+","+b+"load_private_source('/directive_ok.pl'),directive_ok_fact(1)"),"succeeding directives and clauses load after an earlier failure");
+  check(await run(b+"load_private_source_status('/directive_ok.pl',S),string(S),atom_string(A,S),A==ok"),"status helper reports ok");
+  check(await run(b+"load_private_source_status('/directive_fail.pl',S),string_concat('"+marker+"',T,S),string(S),term_string(E,T),E=error(directive_failed(fail),_)"),"status helper carries the canonical exception term");
+  check(await run("\\+ "+b+"recording_directive_failures,\\+ "+b+"source_directive_failure(_)"),"no recording state survives a load");
+  mk(marker+"error(directive_failed(fail),_)");
+  check(await run("E := wasmDirectiveTestError(),catch("+b+"rethrow_creation_error(E),error(directive_failed(D),_),D==fail)"),"a rejected spawn carrying the marker rethrows the term");
+  mk("worker_error: unrelated");
+  check(await run("E := wasmDirectiveTestError(),catch("+b+"rethrow_creation_error(E),X,X==E)"),"other JavaScript errors are rethrown unchanged");
+  check(await run("catch("+b+"rethrow_creation_error(plain),X,X==plain)"),"Prolog exceptions are rethrown unchanged");
+}
+
 async function supervisorOrderContract(run, events, check) {
   const b="swi_wasm_actor_bridge:";
   const seed="A=child(a,[start(true)]),B=child(b,[start(goal(X)),src_list([fact(X)])]),C=child(c,[start(true)]),Children=[child(a,101,A),child(b,202,B),child(c,303,C)],";
@@ -1674,6 +1697,33 @@ const scenarios = {
     global.self.swiWasmBehaviourSource=()=>behaviourSource;
     async function run(goal){let n=0;await engine.prolog.forEach(goal,()=>n++);return n===1;}
     await behaviourWarningContract(run,check);
+  },
+  async directive_failure_worker_bridge(W, check) {
+    await startToplevel(W);
+    async function run(goal){const n=W.sends.length;deliver(W,"'$call'(("+goal+"->R=checked;R=wrong),[template(R)])");const m=await nSends(W,n+1);const ok=/\[checked\],false\)/.test(m[n]||"");if(!ok)console.log("directive probe reply: "+m[n]);return ok;}
+    await directiveFailureContract(run,check);
+  },
+  async directive_failure_main_bridge(W, check) {
+    const body=runtimeSource.split("swiWasmRpcProlog: function() {")[1].split("\n          },")[0];
+    const source=Function(body).call({swiWasmBehaviourProlog:()=>behaviourSource});
+    const engine=await require(path.join(ROOT,"web/swipl-bundle.js"))({arguments:["-q","--nosignals"]});
+    engine.FS.writeFile("/directive_main_bridge.pl",source);
+    check(!!engine.prolog.query("use_module('/directive_main_bridge.pl')").once(),"main bridge loaded");
+    global.self.swiWasmBehaviourSource=()=>behaviourSource;
+    async function run(goal){let n=0;await engine.prolog.forEach(goal,()=>n++);return n===1;}
+    await directiveFailureContract(run,check);
+  },
+  async directive_failure_worker_startup(W, check) {
+    W.S.onmessage({data:{command:"start",pid:PID,behaviourSource,source:"directive_startup_fact(1).\n:- fail.\n",goal:"true"}});
+    check(await until(()=>W.posted.some(m=>m.type==="error"),20000),"failing directive in spawn source reports a startup error");
+    const e=W.posted.find(m=>m.type==="error");
+    check(!!e&&e.error==="web_prolog_exception:error(directive_failed(fail),_)","the parent receives the term as marked text: "+(e&&e.error));
+    check(!W.posted.some(m=>m.type==="ready"||m.type==="spawned"),"the actor is never reported ready");
+  },
+  async directive_success_worker_startup(W, check) {
+    W.S.onmessage({data:{command:"start",pid:PID,behaviourSource,source:":- dynamic directive_ok/1.\n:- true.\n",goal:"true"}});
+    check(await until(()=>W.posted.some(m=>m.type==="ready"),20000),"succeeding directives still start the actor");
+    check(!W.posted.some(m=>m.type==="error"),"no startup error");
   },
   async supervisor_shutdown_worker(W,check) {
     const host=scopedWorkerCoordinator(W);
@@ -3429,7 +3479,7 @@ async function runOne(name) {
 }
 
 
-if (testHost && testHost.cases) Object.assign(scenarios,testHost.cases({CLIENT,NATIVE_ROOT,PID,QPID,ROOT,WASM_DIR,abort,asynchronousAnswerContract,behaviourBody,behaviourSource,behaviourWarningContract,booleanLanguageCases,bootWorker,childSpecContract,clientOptionCases,compatibilityClientHarness,deliver,done,fs,installCleanupReplies,installServerMonitorCoordinator,invalidChildSpecs,invalidClientGoal,invalidSpawnGoal,invalidWrapperGoal,isolatedPromiseEngine,loadCompatibilityStatecharts,mainOutputOrdering,messages,nSends,namedCreationContract,path,portableMain,portableTextCases,portableWorker,promiseEngineIsolationContract,remoteAliasCleanupContract,remoteNamedCreationContract,remoteNamingPeer,remoteSynchronousContract,remoteSynchronousInterruptProbe,remoteSynchronousPeer,runExternalContractCases,runOne,runtime,runtimeSource,scopedWorkerCoordinator,serverMonitorCoordinator,shutdownInterruptProbe,shutdownProbeSource,simpleChart,sleep,spawnOptionCases,spawnOptionMainHarness,spawnOptionWorkerReplies,spawnSync,startActor,startToplevel,startupFaultSource,statechartMonitorContract,supervisorExhaustionContract,supervisorHaltContract,supervisorHaltInterruptProbe,supervisorNotificationContract,supervisorOrderContract,supervisorRestartContract,supervisorRestartPolicyContract,supervisorShutdownContract,supervisorStartupContract,supervisorWaitContract,supervisorWaitInterruptProbe,synchronousToplevelContract,synchronousWaitInterruptProbe,until,uriLanguageCases,validSpawnOptions,workbenchMethod,wrapperCall,wrapperKinds,wrapperOptionCases,wrapperSetup,wrapperWorkerReplies}));
+if (testHost && testHost.cases) Object.assign(scenarios,testHost.cases({CLIENT,NATIVE_ROOT,PID,QPID,ROOT,WASM_DIR,abort,asynchronousAnswerContract,behaviourBody,behaviourSource,behaviourWarningContract,booleanLanguageCases,directiveFailureContract,bootWorker,childSpecContract,clientOptionCases,compatibilityClientHarness,deliver,done,fs,installCleanupReplies,installServerMonitorCoordinator,invalidChildSpecs,invalidClientGoal,invalidSpawnGoal,invalidWrapperGoal,isolatedPromiseEngine,loadCompatibilityStatecharts,mainOutputOrdering,messages,nSends,namedCreationContract,path,portableMain,portableTextCases,portableWorker,promiseEngineIsolationContract,remoteAliasCleanupContract,remoteNamedCreationContract,remoteNamingPeer,remoteSynchronousContract,remoteSynchronousInterruptProbe,remoteSynchronousPeer,runExternalContractCases,runOne,runtime,runtimeSource,scopedWorkerCoordinator,serverMonitorCoordinator,shutdownInterruptProbe,shutdownProbeSource,simpleChart,sleep,spawnOptionCases,spawnOptionMainHarness,spawnOptionWorkerReplies,spawnSync,startActor,startToplevel,startupFaultSource,statechartMonitorContract,supervisorExhaustionContract,supervisorHaltContract,supervisorHaltInterruptProbe,supervisorNotificationContract,supervisorOrderContract,supervisorRestartContract,supervisorRestartPolicyContract,supervisorShutdownContract,supervisorStartupContract,supervisorWaitContract,supervisorWaitInterruptProbe,synchronousToplevelContract,synchronousWaitInterruptProbe,until,uriLanguageCases,validSpawnOptions,workbenchMethod,wrapperCall,wrapperKinds,wrapperOptionCases,wrapperSetup,wrapperWorkerReplies}));
 
 if (require.main === module && process.argv[2]) {
   runOne(process.argv[2]).then(function(failures) {
