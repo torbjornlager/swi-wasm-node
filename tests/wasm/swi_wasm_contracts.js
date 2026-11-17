@@ -279,7 +279,7 @@ function spawnOptionCases(main=false) {
     ["[link(_)]","instantiation_error"], ["[link(maybe)]","domain_error(boolean,maybe)"],
     ["[link(true),link(0)]","type_error(atom,0)"], ["[monitor(_)]","instantiation_error"],
     ["[monitor(1)]","type_error(atom,1)"], ["[node(_)]","instantiation_error"],
-    ["[node(42)]","type_error(atom,42)"], ["[name(_)]","instantiation_error"],
+    ["[node(42)]","type_error(atom_or_string,42)"], ["[name(_)]","instantiation_error"],
     ["[name(compound(x))]","type_error(atom,compound(x))"],
     ["[target(_)]","instantiation_error"], ["[io_target(_)]","instantiation_error"],
     ["[src_text(p(a))]","type_error(atom_or_string,p(a))"],
@@ -294,8 +294,8 @@ function spawnOptionCases(main=false) {
     ["[monitor_ref(42)]","domain_error(spawn_option,monitor_ref(42))"],
     ["[src_text('fact(ok).'),unknown(1)]","domain_error(spawn_option,unknown(1))"]
   ];
-  cases.push(["[src_uri(_)]","instantiation_error"], ["[src_uri(42)]","type_error(atom,42)"],
-    ["[src_uri('https://example.org/source.pl'),src_uri(42)]","type_error(atom,42)"],
+  cases.push(["[src_uri(_)]","instantiation_error"], ["[src_uri(42)]","type_error(atom_or_string,42)"],
+    ["[src_uri('https://example.org/source.pl'),src_uri(42)]","type_error(atom_or_string,42)"],
     ["[src_uri('https://example.org/source.pl'),unknown(1)]","domain_error(spawn_option,unknown(1))"]);
   // Validate the whole list even when a remote dispatch is selected.
   return cases.concat(cases.slice(1).map(([opts,err])=>["[node('https://example.org')|"+opts+"]",err]));
@@ -572,7 +572,7 @@ function wrapperOptionCases(kind, main=false) {
       ["[period(0.5),period(-1)]","domain_error(supervisor_period,-1)"]],
     statechart:[["[trace(_)]","instantiation_error"],["[trace(maybe)]","domain_error(boolean,maybe)"],
       ["[trace(true),trace(1)]","type_error(atom,1)"],["[src_uri(_)]","instantiation_error"],
-      ["[src_uri(42)]","type_error(atom,42)"],
+      ["[src_uri(42)]","type_error(atom_or_string,42)"],
       ["[src_uri('https://example.org/chart.xml'),unknown(1)]","domain_error(spawn_option,unknown(1))"],
       ["[src_text('<invalid/>'),trace(maybe)]","domain_error(boolean,maybe)"],
       ["[src_text('<invalid/>'),src_text(42)]","type_error(atom_or_string,42)"]]
@@ -617,7 +617,7 @@ function clientOptionCases() {
       ["[http_timeout(fast)]","type_error(number,fast)"], ["[http_timeout(_)]","instantiation_error"],
       ["[src_text(p(a))]","type_error(atom_or_string,p(a))"],
       ["[src_text([112,46])]","type_error(atom_or_string,[112,46])"],
-      ["[src_uri(42)]","type_error(atom,42)"], ["[src_uri(_)]","instantiation_error"],
+      ["[src_uri(42)]","type_error(atom_or_string,42)"], ["[src_uri(_)]","instantiation_error"],
       ["[src_list(bad)]","type_error(list,bad)"], ["[src_list([p|_])]","instantiation_error"],
       ["[src_predicates([p])]","type_error(predicate_indicator,p)"],
       ["[src_predicates([p/(-1)])]","type_error(nonneg,-1)"],
@@ -1419,17 +1419,23 @@ function booleanLanguageCases() {
 
 function uriLanguageCases() {
   const cases=[];
-  for(const value of ['42','1.5','foo(bar)','[http,t,p]','[104,116,116,112]','"https://example.org"','localhost:3053','localhost:P']) {
+  // A URI is an atom or a string (a string object or a list of characters or
+  // codes); anything else, including Host:Port, is type_error(atom_or_string,_).
+  for(const value of ['42','1.5','foo(bar)','[http,t,p]','localhost:3053','localhost:P']) {
     for(const goal of [`rpc(${value},true,[src_uri('https://example.org/source')])`,
                         `promise(${value},true,_,[src_uri('https://example.org/source')])`,
                         `spawn(true,_,[node(${value})])`,
                         `spawn(true,_,[src_uri(${value})])`]) {
-      cases.push({label:goal,goal:`catch((${goal},fail),error(type_error(atom,_),_),true),var(P)`});
+      cases.push({label:goal,goal:`catch((${goal},fail),error(type_error(atom_or_string,_),_),true),var(P)`});
     }
   }
   cases.push({label:'URI variable not bound',goal:'catch((rpc(U,true),fail),error(instantiation_error,_),true),var(U)'});
   cases.push({label:'canonical URI atom',goal:`swi_wasm_actor_bridge:browser_uri_atom('https://example.org/é?x=%2F',A),atom(A),A=='https://example.org/é?x=%2F'`});
   cases.push({label:'local node atom',goal:'swi_wasm_actor_bridge:browser_uri_atom(localhost,U),U==localhost'});
+  cases.push({label:'URI as code list',goal:'swi_wasm_actor_bridge:browser_uri_atom([104,116,116,112],U),U==http'});
+  cases.push({label:'URI as character list',goal:`swi_wasm_actor_bridge:browser_uri_atom([h,t,t,p],U),U==http`});
+  cases.push({label:'URI as string object',goal:`atom_string('https://example.org',S),swi_wasm_actor_bridge:browser_uri_atom(S,U),U=='https://example.org'`});
+  cases.push({label:'text URI spawn options are accepted',goal:`atom_string('https://example.org/p',S),swi_wasm_actor_bridge:validate_browser_spawn_options([src_uri(S),node([l,o,c,a,l,h,o,s,t])])`});
   return cases;
 }
 
