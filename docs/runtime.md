@@ -337,7 +337,11 @@ browser/WASM confinement and remote-node access policies apply separately.
 Unknown, private and unavailable keys fail, including URI, authentication,
 timeout, rate and admission-limit settings. Asset URLs, source URLs and remote
 RPC destinations are independent of this execution host and supply no node
-URL. The host has no configured HTTP admission ceilings to report. Repeated
+URL. The host has no configured HTTP admission ceilings to report.
+The [shared admission contract](https://github.com/torbjornlager/trinity-conformance/blob/main/profiles/admission-0.1.md)
+therefore treats server admission budgets as inapplicable here. Operator
+budgets apply at remote server destinations; raising those budgets does not
+change this host's execution limits or introduce a local 120/minute throttle. Repeated
 reads and failed value matches leave the relation unchanged. The predicate is
 available in ordinary queries, private helpers, copied child programs, nested
 sessions and receive callbacks. The packaged node-setting browser tests check
